@@ -217,6 +217,13 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
   font-weight:600;
   color:var(--muted);
 }
+.meal-group-cell .meal-kcal{
+  display:block;
+  margin-top:7px;
+  font-size:12px;
+  font-weight:800;
+  color:var(--text);
+}
 @media(max-width:760px){
   .app-group > summary{padding:13px 14px;font-size:16px}
   .app-group-body{padding:10px}
@@ -797,8 +804,9 @@ function renderFoods(){
   groups.forEach(([meal,mealItems])=>{
     mealItems.forEach((x,index)=>{
       const tr=document.createElement("tr");
+      const mealKcal=Math.round(mealItems.reduce((sum,item)=>sum+(+item.kcal||0),0));
       const mealCell=index===0
-        ? `<td class="meal-group-cell" rowspan="${mealItems.length}">${escapeHtml(meal)}<span class="meal-count">${mealItems.length} ${mealItems.length===1?"alimento":"alimenti"}</span></td>`
+        ? `<td class="meal-group-cell" rowspan="${mealItems.length}">${escapeHtml(meal)}<span class="meal-count">${mealItems.length} ${mealItems.length===1?"alimento":"alimenti"}</span><span class="meal-kcal">${mealKcal} kcal</span></td>`
         : "";
       tr.innerHTML=`${mealCell}<td>${escapeHtml(x.name)}</td><td>${slowCarbBadge(x.name)}</td><td>${round(x.grams,1)}${x.portionMode==="unit"?`<div class="muted tiny">${round(x.units,1)} ${escapeHtml(x.unitLabel||"unità")}</div>`:""}</td><td>${Math.round(x.kcal)}</td><td>${round(x.p)}</td><td>${round(x.c)}</td><td>${round(x.f)}</td><td>${round(x.fib)}</td><td><button class="btnDanger tiny" data-del-food="${x.id}">Elimina</button></td>`;
       body.appendChild(tr);
