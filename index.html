@@ -292,6 +292,7 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
         <div class="row">
           <button class="btn2" id="scanBtn">Scansiona con fotocamera</button>
           <button class="btnGhost" id="barcodeBtn">Cerca barcode</button>
+          <button class="btnGhost" id="resetFoodSearch">Azzera ricerca</button>
         </div>
       </div>
     </div>
@@ -824,6 +825,25 @@ function calculatedPortionGrams(){
 }
 
 
+
+function resetFoodSearch(){
+  stopScan();
+  $("barcode").value="";
+  $("foodName").value="";
+  $("portionWeight").value="";
+  $("units").value="1";
+  $("kcal100").value="";
+  $("p100").value="";
+  $("c100").value="";
+  $("f100").value="";
+  $("fib100").value="";
+  $("foodMessage").textContent="";
+  $("saveBarcodeProduct")?.classList.add("hidden");
+  renderSlowCarbStatus("");
+  updatePortionUI();
+  scanResolved=false;
+}
+
 function normalizeBarcode(raw){
   return String(raw||"").trim().replace(/\s+/g,"");
 }
@@ -1176,16 +1196,28 @@ function init(){
       kcal:(+$("kcal100").value||0)*factor,p:(+$("p100").value||0)*factor,c:(+$("c100").value||0)*factor,
       f:(+$("f100").value||0)*factor,fib:(+$("fib100").value||0)*factor};
     state.foods.push(item);save();
-    ["foodName","portionWeight","kcal100","p100","c100","f100","fib100","barcode"].forEach(id=>$(id).value="");
-    $("units").value="1"; $("foodMessage").textContent="Alimento aggiunto."; renderSlowCarbStatus(""); updatePortionUI(); renderAll();
+    resetFoodSearch();
+    $("foodMessage").textContent="Alimento aggiunto.";
+    renderAll();
   };
   $("barcodeBtn").onclick=()=>{const c=$("barcode").value.trim(); if(c) lookupBarcode(c);};
+  $("resetFoodSearch").onclick=resetFoodSearch;
   $("saveBarcodeProduct").onclick=saveCurrentBarcodeAssociation;
   $("scanBtn").onclick=startScan; $("stopScan").onclick=stopScan;
   $("exportBtn").onclick=exportData;
   renderAll();
 }
-window.addEventListener("beforeunload",stopScan);
+window.addEventListener("beforeunload",()=>stopScan());
+window.addEventListener("pagehide",()=>stopScan());
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden) stopScan();
+});
+window.addEventListener("pageshow",()=>{
+  // iOS can restore a suspended Home Screen web-app from memory.
+  // Always reopen with the scanner closed.
+  stopScan();
+  scanResolved=false;
+});
 init();
 </script>
 </body>
