@@ -354,7 +354,7 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
   </p>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
+<script src="https://unpkg.com/@zxing/browser@0.2.1"></script>
 <script>
 const $ = id => document.getElementById(id);
 const LS_KEY = "slowCarbTracker.v1";
@@ -872,18 +872,32 @@ async function startZXingScanner(video){
   if(!window.ZXingBrowser?.BrowserMultiFormatReader) return false;
   try{
     zxingReader=new ZXingBrowser.BrowserMultiFormatReader();
-    zxingControls=await zxingReader.decodeFromConstraints(
-      {video:{facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720}}},
-      video,
-      async (result, error, controls)=>{
-        if(result && !scanResolved){
-          const text = result.getText ? result.getText() : result.text;
-          await handleScannedBarcode(text);
+    if(stream){
+      zxingControls=await zxingReader.decodeFromStream(
+        stream,
+        video,
+        async (result, error, controls)=>{
+          if(result && !scanResolved){
+            const text = result.getText ? result.getText() : result.text;
+            await handleScannedBarcode(text);
+          }
         }
-      }
-    );
+      );
+    } else {
+      zxingControls=await zxingReader.decodeFromConstraints(
+        {video:{facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720}}},
+        video,
+        async (result, error, controls)=>{
+          if(result && !scanResolved){
+            const text = result.getText ? result.getText() : result.text;
+            await handleScannedBarcode(text);
+          }
+        }
+      );
+    }
     return true;
   }catch(e){
+    console.error("ZXing scanner error", e);
     return false;
   }
 }
@@ -895,35 +909,52 @@ async function startScan(){
   box.classList.remove("hidden");
   if(status) status.textContent="Avvio fotocamera…";
 
+  if(!window.isSecureContext){
+    if(status) status.textContent="La scansione richiede HTTPS. Apri la pagina direttamente dal sito GitHub Pages.";
+    return;
+  }
   if(!navigator.mediaDevices?.getUserMedia){
-    if(status) status.textContent="Fotocamera non disponibile. Inserisci il barcode manualmente.";
+    if(status) status.textContent="Questo browser non consente l'accesso live alla fotocamera. Apri il sito direttamente in Safari.";
     return;
   }
 
   try{
-    // Dove disponibile usiamo prima il rilevatore nativo: è leggero e veloce.
     stream=await navigator.mediaDevices.getUserMedia({
       video:{facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720}},
       audio:false
     });
     video.srcObject=stream;
+    video.setAttribute("playsinline", "true");
+    video.muted=true;
     await video.play();
     if(status) status.textContent="Inquadra il codice a barre e tienilo fermo.";
 
     const nativeStarted=await startNativeBarcodeDetector(video);
-    if(nativeStarted) return;
-
-    // Safari/iPhone spesso non espone BarcodeDetector: passiamo a ZXing.
-    if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; video.srcObject=null; }
-    const zxingStarted=await startZXingScanner(video);
-    if(zxingStarted){
-      if(status) status.textContent="Scanner attivo. Inquadra bene il barcode, possibilmente in orizzontale.";
+    if(nativeStarted){
+      if(status) status.textContent="Scanner attivo. Inquadra il barcode in orizzontale.";
       return;
     }
 
-    if(status) status.textContent="Scanner non disponibile su questo browser. Puoi inserire il codice manualmente.";
+    if(status) status.textContent="Attivo scanner compatibile…";
+    const zxingStarted=await startZXingScanner(video);
+    if(zxingStarted){
+      if(status) status.textContent="Scanner attivo. Inquadra il barcode in orizzontale e avvicinati finché è nitido.";
+      return;
+    }
+
+    if(status){
+      status.textContent=window.ZXingBrowser
+        ? "La fotocamera è disponibile, ma lo scanner non è riuscito ad avviarsi. Prova ad aprire il sito direttamente in Safari."
+        : "Il modulo barcode non è stato caricato. Ricarica la pagina con connessione internet oppure aprila direttamente in Safari.";
+    }
   }catch(e){
-    if(status) status.textContent="Accesso alla fotocamera non riuscito. Controlla i permessi del browser.";
+    console.error("Camera error", e);
+    if(status){
+      const denied = e && (e.name==="NotAllowedError" || e.name==="PermissionDeniedError");
+      status.textContent=denied
+        ? "Permesso fotocamera negato. Abilitalo nelle impostazioni del browser e riprova."
+        : "Accesso alla fotocamera non riuscito. Apri il sito direttamente in Safari e controlla i permessi.";
+    }
   }
 }
 
