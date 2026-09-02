@@ -140,6 +140,88 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
 }
 
 
+
+.groups-toolbar{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin:14px 0 4px;
+}
+.groups-toolbar button{
+  padding:8px 11px;
+  font-size:12px;
+}
+.app-group{
+  margin-top:14px;
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  background:var(--card);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.app-group > summary{
+  list-style:none;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:15px 18px;
+  font-size:17px;
+  font-weight:780;
+  letter-spacing:-.015em;
+  user-select:none;
+}
+.app-group > summary::-webkit-details-marker{display:none}
+.app-group > summary::after{
+  content:"";
+  width:9px;height:9px;
+  border-right:2px solid #738079;
+  border-bottom:2px solid #738079;
+  transform:rotate(45deg);
+  transition:transform .18s ease;
+  flex:0 0 auto;
+  margin-right:3px;
+}
+.app-group[open] > summary::after{transform:rotate(225deg);margin-top:6px}
+.app-group[open] > summary{border-bottom:1px solid #edf1ee}
+.app-group-body{padding:14px}
+.app-group-body > .card,
+.app-group-body > .dashboard-shell,
+.app-group-body > .section-title{margin-top:0}
+.app-group-body > .card{box-shadow:none}
+.app-group-body .dashboard-shell{margin-top:0}
+.app-group-body > section.grid{margin-top:0}
+.group-summary-sub{
+  display:block;
+  margin-top:2px;
+  color:var(--muted);
+  font-weight:500;
+  font-size:11px;
+  letter-spacing:0;
+}
+.summary-title-wrap{display:block}
+
+.meal-group-cell{
+  font-weight:760;
+  color:var(--primary-dark);
+  background:#f5f8f6;
+  vertical-align:top;
+  white-space:nowrap;
+  border-right:1px solid #e8edea;
+}
+.meal-group-cell .meal-count{
+  display:block;
+  margin-top:3px;
+  font-size:10px;
+  font-weight:600;
+  color:var(--muted);
+}
+@media(max-width:760px){
+  .app-group > summary{padding:13px 14px;font-size:16px}
+  .app-group-body{padding:10px}
+}
+
 </style>
 </head>
 <body>
@@ -152,38 +234,17 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
     <button class="btnGhost" id="exportBtn">Esporta dati</button>
   </div>
 
-  <section class="card profile-card">
-    <div class="section-kicker">Impostazioni</div><h2>Profilo e obiettivo</h2>
-    <div class="grid g4">
-      <div><label>Peso iniziale (kg)</label><input id="startWeight" type="number" step="0.1"></div>
-      <div><label>Altezza (cm)</label><input id="height" type="number" step="1"></div>
-      <div><label>Età</label><input id="age" type="number" step="1"></div>
-      <div><label>Sesso per la stima energetica</label>
-        <select id="sex"><option value="male">Uomo</option><option value="female">Donna</option><option value="na">Non specificato</option></select>
-      </div>
-      <div><label>Attività</label>
-        <select id="activity">
-          <option value="1.2">Sedentaria</option>
-          <option value="1.375">Leggera</option>
-          <option value="1.55">Moderata</option>
-          <option value="1.725">Elevata</option>
-        </select>
-      </div>
-      <div><label>Peso obiettivo (kg)</label><input id="goalWeight" type="number" step="0.1"></div>
-      <div><label>Data di partenza</label><input id="startDate" type="date"></div>
-      <div><label>Data obiettivo</label><input id="goalDate" type="date"></div>
-    </div>
-    <div style="margin-top:14px"><button class="btn" id="saveProfile">Salva / ricalcola</button></div>
-    <div class="grid g4" style="margin-top:16px">
-      <div class="metric"><small>Da perdere</small><b id="toLose">—</b><small>kg complessivi</small></div>
-      <div class="metric"><small>Ritmo richiesto</small><b id="pace">—</b><small id="paceDetail">—</small></div>
-      <div class="metric"><small>TDEE stimato</small><b id="tdee">—</b><small>kcal/giorno, stima</small></div>
-      <div class="metric"><small>Tetto calorico iniziale prudente</small><b id="calTarget">—</b><small>deficit ~25%, da rivalutare sul trend reale</small></div>
-    </div>
-  </section>
 
+  <div class="groups-toolbar">
+    <button class="btnGhost" id="expandAllGroups">Espandi tutto</button>
+    <button class="btnGhost" id="collapseAllGroups">Comprimi tutto</button>
+  </div>
 
-
+  <details class="app-group" open>
+    <summary>
+      <span class="summary-title-wrap">Dashboard<span class="group-summary-sub">Calorie, peso, progresso e macro di oggi</span></span>
+    </summary>
+    <div class="app-group-body">
   <div class="dashboard-shell">
     <section class="card dashboard-panel">
       <div class="section-kicker">Oggi</div>
@@ -259,6 +320,53 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
     </div>
   </section>
 
+
+    </div>
+  </details>
+
+  <details class="app-group">
+    <summary>
+      <span class="summary-title-wrap">Profilo e obiettivo<span class="group-summary-sub">Dati personali, TDEE, target e date</span></span>
+    </summary>
+    <div class="app-group-body">
+  <section class="card profile-card">
+    <div class="section-kicker">Impostazioni</div><h2>Profilo e obiettivo</h2>
+    <div class="grid g4">
+      <div><label>Peso iniziale (kg)</label><input id="startWeight" type="number" step="0.1"></div>
+      <div><label>Altezza (cm)</label><input id="height" type="number" step="1"></div>
+      <div><label>Età</label><input id="age" type="number" step="1"></div>
+      <div><label>Sesso per la stima energetica</label>
+        <select id="sex"><option value="male">Uomo</option><option value="female">Donna</option><option value="na">Non specificato</option></select>
+      </div>
+      <div><label>Attività</label>
+        <select id="activity">
+          <option value="1.2">Sedentaria</option>
+          <option value="1.375">Leggera</option>
+          <option value="1.55">Moderata</option>
+          <option value="1.725">Elevata</option>
+        </select>
+      </div>
+      <div><label>Peso obiettivo (kg)</label><input id="goalWeight" type="number" step="0.1"></div>
+      <div><label>Data di partenza</label><input id="startDate" type="date"></div>
+      <div><label>Data obiettivo</label><input id="goalDate" type="date"></div>
+    </div>
+    <div style="margin-top:14px"><button class="btn" id="saveProfile">Salva / ricalcola</button></div>
+    <div class="grid g4" style="margin-top:16px">
+      <div class="metric"><small>Da perdere</small><b id="toLose">—</b><small>kg complessivi</small></div>
+      <div class="metric"><small>Ritmo richiesto</small><b id="pace">—</b><small id="paceDetail">—</small></div>
+      <div class="metric"><small>TDEE stimato</small><b id="tdee">—</b><small>kcal/giorno, stima</small></div>
+      <div class="metric"><small>Tetto calorico iniziale prudente</small><b id="calTarget">—</b><small>deficit ~25%, da rivalutare sul trend reale</small></div>
+    </div>
+  </section>
+
+    </div>
+  </details>
+
+  <details class="app-group">
+    <summary>
+      <span class="summary-title-wrap">Peso e andamento<span class="group-summary-sub">Nuova pesata, storico e traiettoria</span></span>
+    </summary>
+    <div class="app-group-body">
   <section class="grid g2 section-title">
     <div class="card weight-card">
       <div class="section-kicker">Registrazione</div><h2>Peso giornaliero</h2>
@@ -281,6 +389,15 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
     </div>
   </section>
 
+
+    </div>
+  </details>
+
+  <details class="app-group">
+    <summary>
+      <span class="summary-title-wrap">Diario alimentare<span class="group-summary-sub">Pasti, barcode, alimenti e valori nutrizionali</span></span>
+    </summary>
+    <div class="app-group-body">
   <section class="card section-title food-card">
     <div class="section-kicker">Diario</div><h2>Diario alimentare</h2>
     <div class="grid g4">
@@ -338,11 +455,15 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
     </div>
   </section>
 
-  <section class="card section-title info-card">
-    <div class="section-kicker">Informazioni</div><h2>Come leggere la stima calorica</h2>
-    <p class="muted">Il metabolismo basale è stimato con Mifflin–St Jeor e moltiplicato per il livello di attività selezionato. Il “tetto prudente” parte da circa il 75% del dispendio stimato; non è una prescrizione medica e va adattato al trend del peso, alla fame, alla performance e alle condizioni cliniche. Il deficit teorico necessario per la data obiettivo viene mostrato separatamente proprio per evitare di trasformarlo automaticamente in un target alimentare.</p>
-  </section>
 
+    </div>
+  </details>
+
+  <details class="app-group">
+    <summary>
+      <span class="summary-title-wrap">Slow Carb<span class="group-summary-sub">Checklist giornaliera e criteri della dieta</span></span>
+    </summary>
+    <div class="app-group-body">
   <section class="card section-title slow-card">
     <div class="section-kicker">Slow Carb</div><h2>Controllo del giorno</h2>
     <p class="muted">Checklist pratica ispirata ai principi generali della Slow Carb. Le etichette Ammesso / Con limitazioni / Vietato sono una guida pratica per i giorni standard e non sostituiscono indicazioni cliniche personalizzate.</p>
@@ -353,6 +474,24 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
     </div>
     <div style="margin-top:14px"><span class="pill" id="checkScore">0/6 criteri rispettati</span></div>
   </section>
+
+
+    </div>
+  </details>
+
+  <details class="app-group">
+    <summary>
+      <span class="summary-title-wrap">Informazioni<span class="group-summary-sub">Come leggere le stime caloriche</span></span>
+    </summary>
+    <div class="app-group-body">
+  <section class="card section-title info-card">
+    <div class="section-kicker">Informazioni</div><h2>Come leggere la stima calorica</h2>
+    <p class="muted">Il metabolismo basale è stimato con Mifflin–St Jeor e moltiplicato per il livello di attività selezionato. Il “tetto prudente” parte da circa il 75% del dispendio stimato; non è una prescrizione medica e va adattato al trend del peso, alla fame, alla performance e alle condizioni cliniche. Il deficit teorico necessario per la data obiettivo viene mostrato separatamente proprio per evitare di trasformarlo automaticamente in un target alimentare.</p>
+  </section>
+
+
+    </div>
+  </details>
 
   <p class="muted tiny" style="margin:22px 0 40px">
     I dati restano nel browser (localStorage). Le informazioni nutrizionali recuperate da Open Food Facts possono contenere errori o dati mancanti: controllare l'etichetta del prodotto. La fotocamera richiede un browser compatibile e, in genere, una pagina servita in contesto sicuro (HTTPS o localhost).
@@ -635,13 +774,42 @@ function drawChart(){
 }
 
 function renderFoods(){
-  const date=$("foodDate").value||today(), body=$("foodRows"); body.innerHTML="";
-  selectedDateFoods(date).forEach(x=>{
-    const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${x.meal}</td><td>${escapeHtml(x.name)}</td><td>${slowCarbBadge(x.name)}</td><td>${round(x.grams,1)}${x.portionMode==="unit"?`<div class="muted tiny">${round(x.units,1)} ${escapeHtml(x.unitLabel||"unità")}</div>`:""}</td><td>${Math.round(x.kcal)}</td><td>${round(x.p)}</td><td>${round(x.c)}</td><td>${round(x.f)}</td><td>${round(x.fib)}</td><td><button class="btnDanger tiny" data-del-food="${x.id}">Elimina</button></td>`;
-    body.appendChild(tr);
+  const date=$("foodDate").value||today(), body=$("foodRows");
+  body.innerHTML="";
+
+  const items=selectedDateFoods(date);
+  const mealOrder=["Colazione","Pranzo","Cena","Spuntino"];
+  const groups=[];
+
+  mealOrder.forEach(meal=>{
+    const mealItems=items.filter(x=>x.meal===meal);
+    if(mealItems.length) groups.push([meal,mealItems]);
   });
-  body.querySelectorAll("[data-del-food]").forEach(b=>b.onclick=()=>{state.foods=state.foods.filter(x=>x.id!==b.dataset.delFood);save();renderAll();});
+
+  // Keep compatibility with any older/custom meal names.
+  const known=new Set(mealOrder);
+  const extras=[...new Set(items.map(x=>x.meal).filter(m=>!known.has(m)))];
+  extras.forEach(meal=>{
+    const mealItems=items.filter(x=>x.meal===meal);
+    if(mealItems.length) groups.push([meal,mealItems]);
+  });
+
+  groups.forEach(([meal,mealItems])=>{
+    mealItems.forEach((x,index)=>{
+      const tr=document.createElement("tr");
+      const mealCell=index===0
+        ? `<td class="meal-group-cell" rowspan="${mealItems.length}">${escapeHtml(meal)}<span class="meal-count">${mealItems.length} ${mealItems.length===1?"alimento":"alimenti"}</span></td>`
+        : "";
+      tr.innerHTML=`${mealCell}<td>${escapeHtml(x.name)}</td><td>${slowCarbBadge(x.name)}</td><td>${round(x.grams,1)}${x.portionMode==="unit"?`<div class="muted tiny">${round(x.units,1)} ${escapeHtml(x.unitLabel||"unità")}</div>`:""}</td><td>${Math.round(x.kcal)}</td><td>${round(x.p)}</td><td>${round(x.c)}</td><td>${round(x.f)}</td><td>${round(x.fib)}</td><td><button class="btnDanger tiny" data-del-food="${x.id}">Elimina</button></td>`;
+      body.appendChild(tr);
+    });
+  });
+
+  body.querySelectorAll("[data-del-food]").forEach(b=>b.onclick=()=>{
+    state.foods=state.foods.filter(x=>x.id!==b.dataset.delFood);
+    save();
+    renderAll();
+  });
 }
 function escapeHtml(s=""){ return s.replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m])); }
 
@@ -1205,6 +1373,13 @@ function init(){
   $("saveBarcodeProduct").onclick=saveCurrentBarcodeAssociation;
   $("scanBtn").onclick=startScan; $("stopScan").onclick=stopScan;
   $("exportBtn").onclick=exportData;
+
+  $("expandAllGroups").onclick=()=>{
+    document.querySelectorAll(".app-group").forEach(g=>g.open=true);
+  };
+  $("collapseAllGroups").onclick=()=>{
+    document.querySelectorAll(".app-group").forEach((g,i)=>g.open=(i===0));
+  };
   renderAll();
 }
 window.addEventListener("beforeunload",()=>stopScan());
