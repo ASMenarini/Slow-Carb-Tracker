@@ -322,7 +322,11 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
       <div><label>Fibre / 100 g</label><input id="fib100" type="number" step="0.1"></div>
     </div>
     <p class="muted tiny">In modalità grammi inserisci il peso. In modalità misura/unità scegli cucchiaini, cucchiai, pezzi o ml quando disponibili: il peso viene convertito automaticamente.</p>
-    <div class="row"><button class="btn" id="addFood">Aggiungi al diario</button><span id="foodMessage" class="tiny muted"></span></div>
+    <div class="row">
+      <button class="btn" id="addFood">Aggiungi al diario</button>
+      <button class="btnGhost hidden" id="saveBarcodeProduct">Salva questo barcode</button>
+      <span id="foodMessage" class="tiny muted"></span>
+    </div>
 
     <h3 style="margin-top:20px">Totale del giorno</h3>
     <div class="scroll">
@@ -369,7 +373,8 @@ let state = {
   weights:[],
   foods:[],
   checks:{},
-  cheatDays:{}
+  cheatDays:{},
+  customBarcodes:{}
 };
 
 function load(){
@@ -818,21 +823,138 @@ function calculatedPortionGrams(){
   return qty*(opt.grams||0);
 }
 
+
+function normalizeBarcode(raw){
+  return String(raw||"").trim().replace(/\s+/g,"");
+}
+
+function expandUPCE(code){
+  const c=String(code||"").replace(/\D/g,"");
+  if(c.length!==8) return null;
+  const ns=c[0], d=c.slice(1,7), check=c[7];
+  if(!["0","1"].includes(ns)) return null;
+  const last=d[5];
+  let manufacturer="", product="";
+  if(["0","1","2"].includes(last)){
+    manufacturer=d.slice(0,2)+last+"00";
+    product="00"+d.slice(2,5);
+  } else if(last==="3"){
+    manufacturer=d.slice(0,3)+"00";
+    product="000"+d.slice(3,5);
+  } else if(last==="4"){
+    manufacturer=d.slice(0,4)+"0";
+    product="0000"+d[4];
+  } else {
+    manufacturer=d.slice(0,5);
+    product="0000"+last;
+  }
+  return ns+manufacturer+product+check;
+}
+
+function barcodeVariants(raw){
+  const base=normalizeBarcode(raw);
+  const variants=[base];
+  if(/^\d+$/.test(base)){
+    if(base.length===12) variants.push("0"+base);
+    if(base.length===13 && base.startsWith("0")) variants.push(base.slice(1));
+    if(base.length===8){
+      const expanded=expandUPCE(base);
+      if(expanded){
+        variants.push(expanded);
+        variants.push("0"+expanded);
+      }
+    }
+  }
+  return [...new Set(variants.filter(Boolean))];
+}
+
+function applyProductData(product){
+  const n=product.nutriments||{};
+  $("foodName").value=product.product_name_it||product.product_name||product.generic_name_it||product.generic_name||"Prodotto";
+  $("kcal100").value=n["energy-kcal_100g"] ?? product.kcal ?? "";
+  $("p100").value=n.proteins_100g ?? product.p ?? "";
+  $("c100").value=n.carbohydrates_100g ?? product.c ?? "";
+  $("f100").value=n.fat_100g ?? product.f ?? "";
+  $("fib100").value=n.fiber_100g ?? product.fib ?? "";
+  autofillFoodFromCatalog();
+  renderSlowCarbStatus($("foodName").value);
+}
+
 async function lookupBarcode(code){
-  const msg=$("foodMessage"); msg.textContent="Ricerca in Open Food Facts…";
+  const msg=$("foodMessage");
+  const saveBtn=$("saveBarcodeProduct");
+  if(saveBtn) saveBtn.classList.add("hidden");
+
+  const raw=normalizeBarcode(code);
+  if(!raw){
+    msg.textContent="Inserisci un barcode.";
+    return false;
+  }
+
+  state.customBarcodes = state.customBarcodes || {};
+  for(const variant of barcodeVariants(raw)){
+    const local=state.customBarcodes[variant];
+    if(local){
+      $("barcode").value=variant;
+      applyProductData(local);
+      msg.textContent="Prodotto riconosciuto dal tuo archivio locale.";
+      return true;
+    }
+  }
+
+  msg.textContent="Ricerca prodotto…";
   try{
-    const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`);
-    const d=await r.json();
-    if(!d.product){ msg.textContent="Prodotto non trovato."; return; }
-    const n=d.product.nutriments||{};
-    $("foodName").value=d.product.product_name_it||d.product.product_name||d.product.generic_name_it||d.product.generic_name||"Prodotto";
-    $("kcal100").value=n["energy-kcal_100g"] ?? "";
-    $("p100").value=n.proteins_100g ?? "";
-    $("c100").value=n.carbohydrates_100g ?? "";
-    $("f100").value=n.fat_100g ?? "";
-    $("fib100").value=n.fiber_100g ?? "";
-    msg.textContent="Dati caricati: verifica sempre l'etichetta.";
-  }catch(e){ msg.textContent="Errore durante la ricerca del barcode."; }
+    for(const variant of barcodeVariants(raw)){
+      const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(variant)}.json`);
+      if(!r.ok) continue;
+      const d=await r.json();
+      if(d?.product){
+        $("barcode").value=variant;
+        applyProductData(d.product);
+        msg.textContent="Prodotto trovato. Controlla comunque i valori sull'etichetta.";
+        return true;
+      }
+    }
+
+    $("barcode").value=raw;
+    msg.textContent="Barcode letto correttamente, ma prodotto non presente nel database. Inserisci nome e valori una volta, poi premi “Salva questo barcode”.";
+    if(saveBtn) saveBtn.classList.remove("hidden");
+    return false;
+  }catch(e){
+    console.error("Barcode lookup error", e);
+    msg.textContent="Barcode letto, ma la ricerca online non è riuscita. Puoi inserire i dati e salvarli localmente.";
+    if(saveBtn) saveBtn.classList.remove("hidden");
+    return false;
+  }
+}
+
+function saveCurrentBarcodeAssociation(){
+  const code=normalizeBarcode($("barcode").value);
+  const name=$("foodName").value.trim();
+  if(!code || !name){
+    $("foodMessage").textContent="Per salvare il barcode servono almeno codice e nome alimento.";
+    return;
+  }
+  const product={
+    product_name:name,
+    kcal:+$("kcal100").value||0,
+    p:+$("p100").value||0,
+    c:+$("c100").value||0,
+    f:+$("f100").value||0,
+    fib:+$("fib100").value||0,
+    nutriments:{
+      "energy-kcal_100g":+$("kcal100").value||0,
+      proteins_100g:+$("p100").value||0,
+      carbohydrates_100g:+$("c100").value||0,
+      fat_100g:+$("f100").value||0,
+      fiber_100g:+$("fib100").value||0
+    }
+  };
+  state.customBarcodes=state.customBarcodes||{};
+  for(const variant of barcodeVariants(code)) state.customBarcodes[variant]=product;
+  save();
+  $("foodMessage").textContent="Barcode salvato sul dispositivo: da ora verrà riconosciuto automaticamente.";
+  $("saveBarcodeProduct").classList.add("hidden");
 }
 
 let stream=null, scanTimer=null, zxingControls=null, zxingReader=null, scanResolved=false;
@@ -851,7 +973,7 @@ async function startNativeBarcodeDetector(video){
   if(!("BarcodeDetector" in window)) return false;
   try{
     const supported = BarcodeDetector.getSupportedFormats ? await BarcodeDetector.getSupportedFormats() : [];
-    const wanted=["ean_13","ean_8","upc_a","upc_e","code_128"];
+    const wanted=["ean_13","ean_8","upc_a","upc_e","code_128","itf","codabar"];
     const formats=supported.length ? wanted.filter(x=>supported.includes(x)) : wanted;
     if(!formats.length) return false;
     const detector=new BarcodeDetector({formats});
@@ -861,7 +983,7 @@ async function startNativeBarcodeDetector(video){
         const codes=await detector.detect(video);
         if(codes?.length) await handleScannedBarcode(codes[0].rawValue);
       }catch(e){}
-    },350);
+    },250);
     return true;
   }catch(e){
     return false;
@@ -920,10 +1042,21 @@ async function startScan(){
 
   try{
     stream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720}},
+      video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}},
       audio:false
     });
     video.srcObject=stream;
+    try{
+      const track=stream.getVideoTracks()[0];
+      const caps=track?.getCapabilities?.() || {};
+      const advanced={};
+      if(caps.focusMode?.includes?.("continuous")) advanced.focusMode="continuous";
+      if(caps.zoom && typeof caps.zoom.min==="number"){
+        const z=Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.25));
+        advanced.zoom=z;
+      }
+      if(Object.keys(advanced).length) await track.applyConstraints({advanced:[advanced]});
+    }catch(e){}
     video.setAttribute("playsinline", "true");
     video.muted=true;
     await video.play();
@@ -931,14 +1064,14 @@ async function startScan(){
 
     const nativeStarted=await startNativeBarcodeDetector(video);
     if(nativeStarted){
-      if(status) status.textContent="Scanner attivo. Inquadra il barcode in orizzontale.";
+      if(status) status.textContent="Scanner attivo. Tieni il barcode ben illuminato e abbastanza grande nel riquadro.";
       return;
     }
 
     if(status) status.textContent="Attivo scanner compatibile…";
     const zxingStarted=await startZXingScanner(video);
     if(zxingStarted){
-      if(status) status.textContent="Scanner attivo. Inquadra il barcode in orizzontale e avvicinati finché è nitido.";
+      if(status) status.textContent="Scanner attivo. Tieni il barcode ben illuminato, riempi circa metà riquadro e muovi lentamente avanti/indietro finché è nitido.";
       return;
     }
 
@@ -1015,6 +1148,7 @@ function init(){
     state.weights.push({id:crypto.randomUUID?.()||String(Date.now()),date,weight});save();$("weightValue").value="";renderAll();
   };
   $("foodDate").onchange=renderFoods;
+  $("barcode").addEventListener("input",()=>{$("saveBarcodeProduct")?.classList.add("hidden");});
   $("portionMode").addEventListener("change",updatePortionUI);
   $("foodName").addEventListener("change",()=>{
     autofillFoodFromCatalog();
@@ -1046,6 +1180,7 @@ function init(){
     $("units").value="1"; $("foodMessage").textContent="Alimento aggiunto."; renderSlowCarbStatus(""); updatePortionUI(); renderAll();
   };
   $("barcodeBtn").onclick=()=>{const c=$("barcode").value.trim(); if(c) lookupBarcode(c);};
+  $("saveBarcodeProduct").onclick=saveCurrentBarcodeAssociation;
   $("scanBtn").onclick=startScan; $("stopScan").onclick=stopScan;
   $("exportBtn").onclick=exportData;
   renderAll();
