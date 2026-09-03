@@ -260,6 +260,53 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
   letter-spacing:.04em;
 }
 
+
+.dashboard-datebar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  flex-wrap:wrap;
+  margin:0 0 12px;
+  padding:10px 12px;
+  border:1px solid #e3e9e5;
+  border-radius:14px;
+  background:#f8faf9;
+}
+.dashboard-datebar .date-title{
+  font-weight:800;
+  font-size:14px;
+  color:var(--text);
+}
+.dashboard-datebar .date-sub{
+  display:block;
+  margin-top:2px;
+  font-size:10px;
+  font-weight:600;
+  color:var(--muted);
+}
+.dashboard-date-controls{
+  display:flex;
+  gap:7px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+.dashboard-date-controls input{
+  width:auto;
+  min-width:145px;
+  min-height:36px;
+  padding:7px 9px;
+}
+.dashboard-date-controls button{
+  padding:8px 10px;
+  min-height:36px;
+}
+@media(max-width:760px){
+  .dashboard-datebar{align-items:stretch}
+  .dashboard-date-controls{width:100%}
+  .dashboard-date-controls input{flex:1;min-width:130px}
+}
+
 </style>
 </head>
 <body>
@@ -285,9 +332,22 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
       <span class="summary-title-wrap">Dashboard<span class="group-summary-sub">Calorie, peso, progresso e macro di oggi</span></span>
     </summary>
     <div class="app-group-body">
+  <div class="dashboard-datebar">
+    <div>
+      <div class="date-title" id="dashboardDateTitle">Cruscotto di oggi</div>
+      <span class="date-sub">Calorie, macro e peso riferiti alla data selezionata</span>
+    </div>
+    <div class="dashboard-date-controls">
+      <button class="btnGhost" id="dashboardPrevDay" title="Giorno precedente">←</button>
+      <input type="date" id="dashboardDate">
+      <button class="btnGhost" id="dashboardNextDay" title="Giorno successivo">→</button>
+      <button class="btnGhost" id="dashboardToday">Oggi</button>
+    </div>
+  </div>
+
   <div class="dashboard-shell">
     <section class="card dashboard-panel">
-      <div class="section-kicker">Oggi</div>
+      <div class="section-kicker" id="dashboardKicker">Oggi</div>
       <h2>Cruscotto calorie</h2>
       <div class="dashboard-layout">
         <div class="gauge-block">
@@ -955,6 +1015,31 @@ function latestWeight(){
   if(!state.weights.length) return null;
   return [...state.weights].sort((a,b)=>a.date.localeCompare(b.date)).at(-1);
 }
+
+function latestWeightAt(date){
+  const ws=state.weights
+    .filter(w=>w.date<=date)
+    .sort((a,b)=>a.date.localeCompare(b.date));
+  return ws.length?ws.at(-1):null;
+}
+function selectedDashboardDate(){
+  return $("dashboardDate")?.value || $("foodDate")?.value || today();
+}
+function setSelectedDate(date){
+  const d=date||today();
+  if($("dashboardDate")) $("dashboardDate").value=d;
+  if($("foodDate")) $("foodDate").value=d;
+  renderDashboard();
+  renderFoods();
+  renderChecklist();
+}
+function shiftSelectedDate(days){
+  const current=selectedDashboardDate();
+  const d=new Date(current+"T12:00:00");
+  d.setDate(d.getDate()+days);
+  setSelectedDate(d.toISOString().slice(0,10));
+}
+
 function renderProfileMetrics(){
   const p=state.profile, bmr=calcBmr(p), tdee=bmr?bmr*(+p.activity||1.2):null;
   const toLose=(p.startWeight&&p.goalWeight)?p.startWeight-p.goalWeight:null;
@@ -985,7 +1070,7 @@ function setGaugeProgress(id, pct){
   el.style.strokeDashoffset=String(len*(1-clamped/100));
 }
 
-function drawMiniWeightTrend(){
+function drawMiniWeightTrend(endDate=today()){
   const c=$("weightMiniTrend");
   if(!c) return;
   const ctx=c.getContext("2d");
@@ -994,7 +1079,7 @@ function drawMiniWeightTrend(){
   ctx.fillStyle="#fbfcfb";
   ctx.fillRect(0,0,W,H);
 
-  const ws=[...state.weights].sort((a,b)=>a.date.localeCompare(b.date)).slice(-7);
+  const ws=[...state.weights].filter(w=>w.date<=endDate).sort((a,b)=>a.date.localeCompare(b.date)).slice(-7);
   if(ws.length<2){
     ctx.fillStyle="#94a3b8";
     ctx.font="11px system-ui";
@@ -1027,7 +1112,18 @@ function drawMiniWeightTrend(){
 }
 
 function renderDashboard(){
-  const t=totalsFor(today());
+  const selectedDate=selectedDashboardDate();
+  const isToday=selectedDate===today();
+  const t=totalsFor(selectedDate);
+
+  if($("dashboardDate") && $("dashboardDate").value!==selectedDate) $("dashboardDate").value=selectedDate;
+  if($("dashboardDateTitle")){
+    const dt=new Date(selectedDate+"T12:00:00");
+    const pretty=dt.toLocaleDateString("it-IT",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+    $("dashboardDateTitle").textContent=isToday?"Cruscotto di oggi":`Cruscotto del ${pretty}`;
+  }
+  if($("dashboardKicker")) $("dashboardKicker").textContent=isToday?"Oggi":"Data selezionata";
+
   $("todayKcal").textContent=Math.round(t.kcal);
   $("macroP").textContent=round(t.p);
   $("macroC").textContent=round(t.c);
@@ -1049,14 +1145,14 @@ function renderDashboard(){
     const statusText=$("calorieStatusText"), statusNote=$("calorieStatusNote"), gauge=$("calorieGauge");
     if(t.kcal <= target*0.9){
       statusText.textContent='Sotto target';
-      statusNote.textContent='sei dentro il margine previsto';
+      statusNote.textContent=isToday?'sei dentro il margine previsto':'giornata sotto il target indicativo';
     } else if(t.kcal <= target){
       statusText.textContent='Vicino al target';
-      statusNote.textContent='sei quasi al limite indicativo';
+      statusNote.textContent=isToday?'sei quasi al limite indicativo':'giornata vicina al limite indicativo';
       gauge.classList.add('warn');
     } else {
       statusText.textContent='Oltre target';
-      statusNote.textContent='hai superato il tetto indicativo';
+      statusNote.textContent=isToday?'hai superato il tetto indicativo':'giornata oltre il tetto indicativo';
       gauge.classList.add('bad');
     }
   } else {
@@ -1067,10 +1163,15 @@ function renderDashboard(){
   }
   setGaugeProgress('calorieGauge', calPct);
 
-  const last7=state.weights.filter(w=>daysBetween(w.date,today())>=0 && daysBetween(w.date,today())<=6);
+  // 7 calendar days ending on the selected date.
+  const last7=state.weights.filter(w=>{
+    const d=daysBetween(w.date,selectedDate);
+    return d>=0 && d<=6;
+  });
   $("avg7").textContent=last7.length?round(last7.reduce((s,w)=>s+(+w.weight),0)/last7.length,1):"—";
 
-  const lw=latestWeight(), planned=lw?plannedWeightAt(lw.date):null;
+  // Weight status as it was known on the selected date.
+  const lw=latestWeightAt(selectedDate), planned=lw?plannedWeightAt(lw.date):null;
   if(lw && planned!=null){
     const diff=lw.weight-planned;
     $("programStatus").textContent=(diff<=0?"In linea":"Sopra di ")+ (diff<=0?Math.abs(round(diff,1))+" kg":round(diff,1)+" kg");
@@ -1078,7 +1179,7 @@ function renderDashboard(){
     $("programDetail").textContent="peso registrato vs traiettoria alla stessa data";
   } else {
     $("programStatus").textContent="—"; $("programStatus").className="";
-    $("programDetail").textContent="servono almeno una pesata";
+    $("programDetail").textContent="nessuna pesata disponibile fino a questa data";
   }
 
   const p=state.profile;
@@ -1098,16 +1199,16 @@ function renderDashboard(){
   } else {
     $("progressPct").textContent="0%"; $("progressBar").style.width="0%";
     $("weightCenterMain").textContent='—';
-    $("weightCenterSub").textContent='aggiungi almeno una pesata';
+    $("weightCenterSub").textContent='nessuna pesata disponibile';
   }
   setGaugeProgress('weightGauge', pct);
-  drawMiniWeightTrend();
+  drawMiniWeightTrend(selectedDate);
 
-  renderForecast();
+  renderForecast(selectedDate);
 }
 
-function renderForecast(){
-  const ws=[...state.weights].sort((a,b)=>a.date.localeCompare(b.date));
+function renderForecast(endDate=today()){
+  const ws=[...state.weights].filter(w=>w.date<=endDate).sort((a,b)=>a.date.localeCompare(b.date));
   if(ws.length<3 || !state.profile.goalWeight){ $("forecast").textContent="—"; return; }
   const x0=new Date(ws[0].date+"T12:00:00").getTime()/86400000;
   const xs=ws.map(w=>new Date(w.date+"T12:00:00").getTime()/86400000-x0);
@@ -1787,7 +1888,7 @@ function renderAll(){
 }
 function init(){
   load(); fillProfile(); initFoodCatalog();
-  $("weightDate").value=today(); $("foodDate").value=today(); updatePortionUI();
+  $("weightDate").value=today(); $("foodDate").value=today(); $("dashboardDate").value=today(); updatePortionUI();
   $("saveProfile").onclick=readProfile;
   $("addWeight").onclick=()=>{
     const date=$("weightDate").value, weight=+$("weightValue").value;
@@ -1795,7 +1896,11 @@ function init(){
     state.weights=state.weights.filter(w=>w.date!==date);
     state.weights.push({id:crypto.randomUUID?.()||String(Date.now()),date,weight});save();$("weightValue").value="";renderAll();
   };
-  $("foodDate").onchange=renderFoods;
+  $("foodDate").onchange=()=>setSelectedDate($("foodDate").value);
+  $("dashboardDate").onchange=()=>setSelectedDate($("dashboardDate").value);
+  $("dashboardPrevDay").onclick=()=>shiftSelectedDate(-1);
+  $("dashboardNextDay").onclick=()=>shiftSelectedDate(1);
+  $("dashboardToday").onclick=()=>setSelectedDate(today());
   $("barcode").addEventListener("input",()=>{$("saveBarcodeProduct")?.classList.add("hidden");});
   $("portionMode").addEventListener("change",updatePortionUI);
   $("foodName").addEventListener("change",()=>{
