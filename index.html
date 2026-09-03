@@ -222,6 +222,23 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
   .app-group-body{padding:10px}
 }
 
+
+.cloud-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.cloud-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.sync-status{
+  display:flex;align-items:center;gap:8px;
+  padding:10px 12px;border-radius:12px;background:#f7f9f8;border:1px solid #e3e9e5;
+  font-size:12px;color:var(--muted);margin-top:12px
+}
+.sync-dot{width:8px;height:8px;border-radius:50%;background:#9aa49f;flex:0 0 auto}
+.sync-status.ok .sync-dot{background:var(--ok)}
+.sync-status.warn .sync-dot{background:var(--warn)}
+.sync-status.bad .sync-dot{background:var(--bad)}
+.sync-status.syncing .sync-dot{background:var(--primary)}
+.sync-user{font-weight:700;color:var(--text)}
+.cloud-note{font-size:11px;color:var(--muted);line-height:1.45;margin-top:8px}
+@media(max-width:760px){.cloud-grid{grid-template-columns:1fr}}
+
 </style>
 </head>
 <body>
@@ -483,6 +500,56 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
 
   <details class="app-group">
     <summary>
+      <span class="summary-title-wrap">Sincronizzazione cloud<span class="group-summary-sub">Telefono e PC sempre allineati tramite Supabase</span></span>
+    </summary>
+    <div class="app-group-body">
+      <section class="card">
+        <div class="section-kicker">Configurazione</div>
+        <h2>Supabase</h2>
+        <div class="cloud-grid">
+          <div>
+            <label>Project URL</label>
+            <input id="supabaseUrl" type="url" placeholder="https://xxxx.supabase.co">
+          </div>
+          <div>
+            <label>Anon / publishable key</label>
+            <input id="supabaseAnonKey" type="password" placeholder="sb_publishable_... oppure anon key">
+          </div>
+        </div>
+        <div class="cloud-actions">
+          <button class="btnGhost" id="saveCloudConfig">Salva configurazione</button>
+          <button class="btnGhost" id="clearCloudConfig">Rimuovi configurazione</button>
+        </div>
+        <div class="cloud-note">La chiave anon/publishable può stare nel browser: la protezione dei dati viene applicata dalle policy RLS del database. Non usare mai una service_role key.</div>
+      </section>
+
+      <section class="card" style="margin-top:12px">
+        <div class="section-kicker">Account</div>
+        <h2>Accesso</h2>
+        <div class="cloud-grid">
+          <div>
+            <label>Email</label>
+            <input id="cloudEmail" type="email" autocomplete="email" placeholder="nome@email.it">
+          </div>
+          <div>
+            <label>Password</label>
+            <input id="cloudPassword" type="password" autocomplete="current-password" placeholder="Password">
+          </div>
+        </div>
+        <div class="cloud-actions">
+          <button class="btn" id="cloudLogin">Accedi</button>
+          <button class="btnGhost" id="cloudRegister">Crea account</button>
+          <button class="btnGhost" id="cloudLogout">Esci</button>
+          <button class="btnGhost" id="cloudSyncNow">Sincronizza ora</button>
+        </div>
+        <div class="sync-status" id="cloudStatus"><span class="sync-dot"></span><span id="cloudStatusText">Cloud non configurato</span></div>
+        <div class="cloud-note">Dopo l'accesso, ogni modifica viene salvata online automaticamente. Quando apri l'app su un altro dispositivo con lo stesso account, viene caricata la versione più recente.</div>
+      </section>
+    </div>
+  </details>
+
+  <details class="app-group">
+    <summary>
       <span class="summary-title-wrap">Informazioni<span class="group-summary-sub">Come leggere le stime caloriche</span></span>
     </summary>
     <div class="app-group-body">
@@ -501,9 +568,16 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
 </div>
 
 <script src="https://unpkg.com/@zxing/browser@0.2.1"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const $ = id => document.getElementById(id);
 const LS_KEY = "slowCarbTracker.v1";
+const CLOUD_CONFIG_KEY = "slowCarbTracker.supabaseConfig.v1";
+let sbClient=null;
+let sbSession=null;
+let cloudPushTimer=null;
+let applyingRemoteState=false;
+let cloudSyncBusy=false;
 const today = () => new Date().toISOString().slice(0,10);
 const round = (n,d=1) => Math.round((+n||0)*10**d)/10**d;
 const FOOD_CATALOG = [{"name":"Aglio","kcal":149,"p":6.4,"c":33.1,"f":0.5,"fib":2.1,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Albume d'uovo","kcal":52,"p":10.9,"c":0.7,"f":0.2,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Arachidi","kcal":567,"p":25.8,"c":16.1,"f":49.2,"fib":8.5,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Arancia","kcal":47,"p":0.9,"c":11.8,"f":0.1,"fib":2.4,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Asparagi cotti","kcal":22,"p":2.4,"c":4.1,"f":0.2,"fib":2.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Avena fiocchi","kcal":389,"p":16.9,"c":66.3,"f":6.9,"fib":10.6,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Avocado","kcal":160,"p":2.0,"c":8.5,"f":14.7,"fib":6.7,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Banana","kcal":89,"p":1.1,"c":22.8,"f":0.3,"fib":2.6,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Birra chiara","kcal":43,"p":0.5,"c":3.6,"f":0.0,"fib":0.0,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Branzino cotto","kcal":124,"p":23.6,"c":0.0,"f":2.6,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Bresaola","kcal":151,"p":32.0,"c":0.5,"f":2.0,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Broccoli cotti","kcal":35,"p":2.4,"c":7.2,"f":0.4,"fib":3.3,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Burro di arachidi 100%","kcal":588,"p":25.0,"c":20.0,"f":50.0,"fib":6.0,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Caffè espresso senza zucchero","kcal":2,"p":0.1,"c":0.0,"f":0.0,"fib":0.0,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Cappuccino senza zucchero","kcal":45,"p":2.5,"c":4.0,"f":2.0,"fib":0.0,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Carote cotte","kcal":35,"p":0.8,"c":8.2,"f":0.2,"fib":3.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Carote crude","kcal":41,"p":0.9,"c":9.6,"f":0.2,"fib":2.8,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Cavolfiore cotto","kcal":23,"p":1.8,"c":4.1,"f":0.5,"fib":2.3,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Cavolo cappuccio","kcal":25,"p":1.3,"c":5.8,"f":0.1,"fib":2.5,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Ceci cotti","kcal":164,"p":8.9,"c":27.4,"f":2.6,"fib":7.6,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Cetrioli","kcal":15,"p":0.7,"c":3.6,"f":0.1,"fib":0.5,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Cioccolato fondente 85%","kcal":598,"p":7.8,"c":19.0,"f":52.0,"fib":11.0,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Cipolla","kcal":40,"p":1.1,"c":9.3,"f":0.1,"fib":1.7,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Coscia di pollo senza pelle cotta","kcal":209,"p":26.0,"c":0.0,"f":10.9,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Edamame cotti","kcal":121,"p":11.9,"c":8.9,"f":5.2,"fib":5.2,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Fagioli borlotti cotti","kcal":127,"p":8.7,"c":22.8,"f":0.5,"fib":6.4,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Fagioli cannellini cotti","kcal":114,"p":7.6,"c":20.5,"f":0.5,"fib":6.3,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Fagioli neri cotti","kcal":132,"p":8.9,"c":23.7,"f":0.5,"fib":8.7,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Fagiolini cotti","kcal":35,"p":1.9,"c":7.9,"f":0.3,"fib":3.2,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Fiocchi di latte","kcal":98,"p":11.1,"c":3.4,"f":4.3,"fib":0.0,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Fragole","kcal":32,"p":0.7,"c":7.7,"f":0.3,"fib":2.0,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Funghi champignon","kcal":22,"p":3.1,"c":3.3,"f":0.3,"fib":1.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Gamberi cotti","kcal":99,"p":24.0,"c":0.2,"f":0.3,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Latte intero","kcal":61,"p":3.2,"c":4.8,"f":3.3,"fib":0.0,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Latte scremato","kcal":35,"p":3.4,"c":5.0,"f":0.1,"fib":0.0,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Lattuga","kcal":15,"p":1.4,"c":2.9,"f":0.2,"fib":1.3,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Lenticchie cotte","kcal":116,"p":9.0,"c":20.1,"f":0.4,"fib":7.9,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Maiale lonza cotta","kcal":196,"p":29.0,"c":0.0,"f":8.0,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Mais dolce cotto","kcal":96,"p":3.4,"c":21.0,"f":1.5,"fib":2.4,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Mandorle","kcal":579,"p":21.2,"c":21.6,"f":49.9,"fib":12.5,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Manzo magro cotto","kcal":217,"p":26.1,"c":0.0,"f":11.8,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Mela","kcal":52,"p":0.3,"c":13.8,"f":0.2,"fib":2.4,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Melanzane cotte","kcal":35,"p":0.8,"c":8.7,"f":0.2,"fib":2.5,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Merluzzo cotto","kcal":105,"p":23.0,"c":0.0,"f":0.9,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Mirtilli","kcal":57,"p":0.7,"c":14.5,"f":0.3,"fib":2.4,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Mozzarella","kcal":254,"p":18.7,"c":2.8,"f":19.5,"fib":0.0,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Noci","kcal":654,"p":15.2,"c":13.7,"f":65.2,"fib":6.7,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Olio extravergine d'oliva","kcal":884,"p":0.0,"c":0.0,"f":100.0,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Olive verdi","kcal":145,"p":1.0,"c":3.8,"f":15.3,"fib":3.3,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Orata cotta","kcal":121,"p":20.0,"c":0.0,"f":4.0,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Pane bianco","kcal":265,"p":9.0,"c":49.0,"f":3.2,"fib":2.7,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Pane integrale","kcal":247,"p":13.0,"c":41.0,"f":4.2,"fib":7.0,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Parmigiano Reggiano","kcal":402,"p":32.4,"c":0.0,"f":30.0,"fib":0.0,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Pasta cotta","kcal":158,"p":5.8,"c":30.9,"f":0.9,"fib":1.8,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Patate bollite","kcal":87,"p":1.9,"c":20.1,"f":0.1,"fib":1.8,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Patate dolci cotte","kcal":90,"p":2.0,"c":20.7,"f":0.2,"fib":3.3,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Peperoni rossi crudi","kcal":31,"p":1.0,"c":6.0,"f":0.3,"fib":2.1,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Petto di pollo cotto","kcal":165,"p":31.0,"c":0.0,"f":3.6,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Piselli cotti","kcal":84,"p":5.4,"c":15.0,"f":0.4,"fib":5.5,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Polpo cotto","kcal":164,"p":29.8,"c":4.4,"f":2.1,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Pomodori","kcal":18,"p":0.9,"c":3.9,"f":0.2,"fib":1.2,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Pomodorini","kcal":18,"p":0.9,"c":3.9,"f":0.2,"fib":1.2,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Prosciutto cotto alta qualità","kcal":145,"p":20.0,"c":1.5,"f":6.5,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Prosciutto crudo sgrassato","kcal":195,"p":28.0,"c":0.5,"f":8.0,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Quinoa cotta","kcal":120,"p":4.4,"c":21.3,"f":1.9,"fib":2.8,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Ricotta vaccina","kcal":174,"p":11.3,"c":3.0,"f":13.0,"fib":0.0,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Riso basmati cotto","kcal":121,"p":3.5,"c":25.2,"f":0.4,"fib":0.4,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Riso bianco cotto","kcal":130,"p":2.4,"c":28.2,"f":0.3,"fib":0.4,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Rucola","kcal":25,"p":2.6,"c":3.7,"f":0.7,"fib":1.6,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Sale fino","kcal":0,"p":0.0,"c":0.0,"f":0.0,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Salmone cotto","kcal":206,"p":22.0,"c":0.0,"f":12.0,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Spinaci cotti","kcal":23,"p":3.0,"c":3.8,"f":0.3,"fib":2.4,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Spinaci crudi","kcal":23,"p":2.9,"c":3.6,"f":0.4,"fib":2.2,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Tacchino petto cotto","kcal":135,"p":29.0,"c":0.0,"f":1.8,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Tempeh","kcal":193,"p":20.3,"c":7.6,"f":10.8,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Tofu compatto","kcal":144,"p":17.3,"c":2.8,"f":8.7,"fib":2.3,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Tonno al naturale sgocciolato","kcal":116,"p":26.0,"c":0.0,"f":1.0,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Uovo intero","kcal":143,"p":12.6,"c":0.7,"f":9.5,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Verza cotta","kcal":27,"p":2.0,"c":6.1,"f":0.1,"fib":3.1,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Vino rosso","kcal":85,"p":0.1,"c":2.6,"f":0.0,"fib":0.0,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Vitello magro cotto","kcal":172,"p":28.0,"c":0.0,"f":6.0,"fib":0.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Yogurt greco 0%","kcal":59,"p":10.3,"c":3.6,"f":0.4,"fib":0.0,"scStatus":"limited","scNote":"Compatibile solo con moderazione o non è una scelta base della Slow Carb classica."},{"name":"Zucchero bianco","kcal":387,"p":0.0,"c":100.0,"f":0.0,"fib":0.0,"scStatus":"forbidden","scNote":"Da evitare nei giorni Slow Carb standard; meglio riservarlo al cheat day."},{"name":"Zucchine cotte","kcal":17,"p":1.2,"c":3.1,"f":0.3,"fib":1.0,"scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Acqua frizzante","kcal":0,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"allowed","scNote":"Scelta base."},{"name":"Acqua naturale","kcal":0,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"allowed","scNote":"Scelta base."},{"name":"Acqua tonica","kcal":34,"p":0,"c":8.5,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Contiene zucchero."},{"name":"Acqua tonica zero","kcal":2,"p":0,"c":0.4,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Senza zucchero; usare con moderazione."},{"name":"Amaro","kcal":250,"p":0,"c":25,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Generalmente contiene zuccheri."},{"name":"Aperol","kcal":160,"p":0,"c":25,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Liquore zuccherato."},{"name":"Birra analcolica 0.0%","kcal":22,"p":0.3,"c":5.0,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Anche senza alcol contiene carboidrati da malto e calorie liquide: non compatibile nei giorni Slow Carb standard."},{"name":"Birra analcolica <0.5%","kcal":25,"p":0.3,"c":5.5,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Senza quasi alcol ma con carboidrati da malto: meglio cheat day."},{"name":"Birra IPA","kcal":55,"p":0.6,"c":5.5,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Birra e carboidrati liquidi: da riservare al cheat day."},{"name":"Birra lager","kcal":43,"p":0.5,"c":3.6,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Birra non compatibile nei giorni standard."},{"name":"Birra weiss","kcal":45,"p":0.5,"c":4,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Birra non compatibile nei giorni standard."},{"name":"Campari","kcal":112,"p":0,"c":12,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Liquore con zuccheri."},{"name":"Champagne brut","kcal":76,"p":0.1,"c":1.8,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Alcol: meglio piccole quantità occasionali."},{"name":"Chinotto","kcal":48,"p":0,"c":12,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Bevanda zuccherata."},{"name":"Coca-Cola","kcal":42,"p":0,"c":10.6,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Bevanda zuccherata: non compatibile nei giorni standard."},{"name":"Coca-Cola Light","kcal":0.2,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Senza calorie rilevanti; usare con moderazione."},{"name":"Coca-Cola Zero","kcal":0.2,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Senza calorie rilevanti, ma i dolcificanti non sono una scelta base della Slow Carb classica."},{"name":"Energy drink zero","kcal":3,"p":0,"c":0.7,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Senza zucchero, ma non è una scelta base quotidiana."},{"name":"Energy drink zuccherato","kcal":45,"p":0,"c":11,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Zuccheri liquidi: da evitare."},{"name":"Fanta arancia","kcal":40,"p":0,"c":9.6,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Bevanda zuccherata."},{"name":"Fanta Zero","kcal":1,"p":0,"c":0.2,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Senza zucchero; usare con moderazione."},{"name":"Gassosa","kcal":38,"p":0,"c":9.5,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Bevanda zuccherata."},{"name":"Gin","kcal":231,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Zero carboidrati ma alcolico: limita la quantità e evita mixer zuccherati."},{"name":"Gin tonic classico","kcal":75,"p":0,"c":8,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"La tonica classica aggiunge zuccheri."},{"name":"Gin tonic con tonica zero","kcal":55,"p":0,"c":0.2,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Meglio della versione zuccherata, ma resta alcolico."},{"name":"Latte di mandorla senza zucchero","kcal":15,"p":0.6,"c":0.5,"f":1.2,"fib":0.3,"category":"Bevande","scStatus":"limited","scNote":"Poco calorico, ma non è una scelta base della Slow Carb classica."},{"name":"Latte di soia senza zucchero","kcal":33,"p":3.3,"c":0.7,"f":1.8,"fib":0.6,"category":"Bevande","scStatus":"limited","scNote":"Poco zucchero; usare con moderazione."},{"name":"Latte d’avena","kcal":46,"p":1,"c":6.7,"f":1.5,"fib":0.8,"category":"Bevande","scStatus":"forbidden","scNote":"Deriva da cereali e contiene carboidrati liquidi."},{"name":"Limoncello","kcal":325,"p":0,"c":40,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Liquore molto zuccherato."},{"name":"Mojito","kcal":85,"p":0,"c":10,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Cocktail con zucchero."},{"name":"Pepsi","kcal":43,"p":0,"c":11,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Bevanda zuccherata: non compatibile nei giorni standard."},{"name":"Pepsi Max","kcal":0.3,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Senza zucchero; usare con moderazione."},{"name":"Prosecco","kcal":75,"p":0.1,"c":1.5,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Alcol: meglio piccole quantità occasionali."},{"name":"Rum","kcal":231,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Alcolico: attenzione soprattutto ai mixer zuccherati."},{"name":"Sprite","kcal":39,"p":0,"c":9.8,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Bevanda zuccherata."},{"name":"Sprite Zero","kcal":0.2,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Senza zucchero; usare con moderazione."},{"name":"Spritz Aperol","kcal":120,"p":0,"c":12,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Cocktail con alcol e zuccheri."},{"name":"Succo di mela 100%","kcal":46,"p":0.1,"c":11.3,"f":0.1,"fib":0.2,"category":"Bevande","scStatus":"forbidden","scNote":"Zuccheri della frutta in forma liquida."},{"name":"Succo d’arancia 100%","kcal":45,"p":0.7,"c":10.4,"f":0.2,"fib":0.2,"category":"Bevande","scStatus":"forbidden","scNote":"Anche senza zucchero aggiunto concentra gli zuccheri della frutta."},{"name":"Tequila","kcal":231,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Alcolico: piccole quantità occasionali."},{"name":"Tè freddo zero","kcal":1,"p":0,"c":0.2,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Senza zucchero; usare con moderazione."},{"name":"Tè freddo zuccherato","kcal":30,"p":0,"c":7.5,"f":0,"fib":0,"category":"Bevande","scStatus":"forbidden","scNote":"Contiene zucchero liquido."},{"name":"Tè nero senza zucchero","kcal":0,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"allowed","scNote":"Compatibile senza zucchero."},{"name":"Tè verde senza zucchero","kcal":0,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"allowed","scNote":"Compatibile senza zucchero."},{"name":"Vino bianco secco","kcal":82,"p":0.1,"c":2.6,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Piccole quantità possono essere tollerate, ma l’alcol può rallentare il dimagrimento."},{"name":"Vodka","kcal":231,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Zero carboidrati ma alcolico: limita la quantità."},{"name":"Whisky","kcal":250,"p":0,"c":0,"f":0,"fib":0,"category":"Bevande","scStatus":"limited","scNote":"Zero carboidrati ma alcolico: limita la quantità."},{"name":"Agnello cotto","kcal":294,"p":25,"c":0,"f":21,"fib":0,"category":"Carni","scStatus":"limited","scNote":"Compatibile ma più grasso: porzione moderata."},{"name":"Coniglio cotto","kcal":173,"p":33,"c":0,"f":3.5,"fib":0,"category":"Carni","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Fegato di manzo cotto","kcal":191,"p":29,"c":5,"f":5,"fib":0,"category":"Carni","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Hamburger di manzo 90% magro","kcal":250,"p":26,"c":0,"f":17,"fib":0,"category":"Carni","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Pollo arrosto con pelle","kcal":239,"p":27,"c":0,"f":14,"fib":0,"category":"Carni","scStatus":"limited","scNote":"Compatibile, ma la pelle aumenta molto i grassi."},{"name":"Salsiccia di maiale cotta","kcal":301,"p":18,"c":1.4,"f":25,"fib":0,"category":"Carni","scStatus":"limited","scNote":"Proteica ma molto grassa e spesso lavorata: moderazione."},{"name":"Aceto balsamico","kcal":88,"p":0.5,"c":17,"f":0,"fib":0,"category":"Condimenti","scStatus":"limited","scNote":"Contiene più zuccheri degli altri aceti: usarne poco."},{"name":"Aceto di mele","kcal":21,"p":0,"c":0.9,"f":0,"fib":0,"category":"Condimenti","scStatus":"allowed","scNote":"Compatibile se senza zuccheri aggiunti."},{"name":"Aceto di vino bianco","kcal":18,"p":0,"c":0.3,"f":0,"fib":0,"category":"Condimenti","scStatus":"allowed","scNote":"Condimento praticamente privo di calorie."},{"name":"Aceto di vino rosso","kcal":19,"p":0,"c":0.3,"f":0,"fib":0,"category":"Condimenti","scStatus":"allowed","scNote":"Condimento praticamente privo di calorie; controlla eventuali zuccheri aggiunti."},{"name":"Burro","kcal":717,"p":0.9,"c":0.1,"f":81.1,"fib":0,"category":"Condimenti","scStatus":"limited","scNote":"Latticino/grasso concentrato: non è una scelta base della Slow Carb classica."},{"name":"Olio di arachidi","kcal":884,"p":0,"c":0,"f":100,"fib":0,"category":"Condimenti","scStatus":"allowed","scNote":"Compatibile, ma molto calorico: misura la quantità."},{"name":"Olio di cocco","kcal":892,"p":0,"c":0,"f":100,"fib":0,"category":"Condimenti","scStatus":"limited","scNote":"Grasso concentrato: compatibile solo in quantità moderate."},{"name":"Olio di semi di girasole","kcal":884,"p":0,"c":0,"f":100,"fib":0,"category":"Condimenti","scStatus":"allowed","scNote":"Compatibile, ma molto calorico: misura la quantità."},{"name":"Succo di limone","kcal":22,"p":0.4,"c":6.9,"f":0.2,"fib":0.3,"category":"Condimenti","scStatus":"allowed","scNote":"Usato come condimento in piccole quantità è compatibile."},{"name":"Asiago","kcal":356,"p":25,"c":1.5,"f":27,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Brie","kcal":334,"p":21,"c":0.5,"f":28,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Caciocavallo","kcal":439,"p":37,"c":1,"f":32,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Camembert","kcal":300,"p":20,"c":0.5,"f":24,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Caprino fresco","kcal":268,"p":18,"c":1,"f":22,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Cheddar","kcal":403,"p":25,"c":1.3,"f":33,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Crescenza","kcal":281,"p":16,"c":2,"f":24,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Emmental","kcal":380,"p":28,"c":1.5,"f":29,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Feta","kcal":264,"p":14,"c":4.1,"f":21,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Fontina","kcal":389,"p":25,"c":1.6,"f":31,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Gorgonzola","kcal":353,"p":21,"c":2.3,"f":29,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Grana Padano","kcal":398,"p":33,"c":0,"f":29,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Gruviera","kcal":413,"p":30,"c":0.4,"f":32,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Kefir naturale","kcal":61,"p":3.5,"c":4.7,"f":3.3,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Mascarpone","kcal":429,"p":4.6,"c":4.5,"f":42,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Pecorino Romano","kcal":387,"p":32,"c":0,"f":27,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Pecorino Toscano","kcal":366,"p":26,"c":1,"f":29,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Philadelphia classico","kcal":225,"p":5.5,"c":4.3,"f":21,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Provolone","kcal":351,"p":26,"c":2.1,"f":27,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Robiola","kcal":338,"p":20,"c":2,"f":28,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Scamorza","kcal":334,"p":25,"c":1,"f":25,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Skyr naturale","kcal":63,"p":11,"c":4,"f":0.2,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Stracchino","kcal":300,"p":17,"c":2,"f":25,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Taleggio","kcal":315,"p":19,"c":0.5,"f":26,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Yogurt alla frutta zuccherato","kcal":95,"p":3.5,"c":15,"f":2.5,"fib":0,"category":"Formaggi e latticini","scStatus":"forbidden","scNote":"Contiene zuccheri e latticini: meglio cheat day."},{"name":"Yogurt intero bianco","kcal":61,"p":3.5,"c":4.7,"f":3.3,"fib":0,"category":"Formaggi e latticini","scStatus":"limited","scNote":"Latticino: non è una scelta base della Slow Carb classica; se lo usi, porzione moderata."},{"name":"Albicocca","kcal":48,"p":1.4,"c":11.1,"f":0.4,"fib":2,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Ananas","kcal":50,"p":0.5,"c":13.1,"f":0.1,"fib":1.4,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Anguria","kcal":30,"p":0.6,"c":7.6,"f":0.2,"fib":0.4,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Cachi","kcal":70,"p":0.6,"c":18.6,"f":0.2,"fib":3.6,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Ciliegie","kcal":63,"p":1.1,"c":16,"f":0.2,"fib":2.1,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Clementine","kcal":47,"p":0.9,"c":12,"f":0.2,"fib":1.7,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Cocco fresco","kcal":354,"p":3.3,"c":15.2,"f":33.5,"fib":9,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Datteri","kcal":282,"p":2.5,"c":75,"f":0.4,"fib":8,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Fichi","kcal":74,"p":0.8,"c":19.2,"f":0.3,"fib":2.9,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Guava","kcal":68,"p":2.6,"c":14.3,"f":1,"fib":5.4,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Kiwi","kcal":61,"p":1.1,"c":14.7,"f":0.5,"fib":3,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Lamponi","kcal":52,"p":1.2,"c":11.9,"f":0.7,"fib":6.5,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Lime","kcal":30,"p":0.7,"c":10.5,"f":0.2,"fib":2.8,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Limone","kcal":29,"p":1.1,"c":9.3,"f":0.3,"fib":2.8,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Litchi","kcal":66,"p":0.8,"c":16.5,"f":0.4,"fib":1.3,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Mandarino","kcal":53,"p":0.8,"c":13.3,"f":0.3,"fib":1.8,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Mango","kcal":60,"p":0.8,"c":15,"f":0.4,"fib":1.6,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Melograno","kcal":83,"p":1.7,"c":18.7,"f":1.2,"fib":4,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Melone","kcal":34,"p":0.8,"c":8.2,"f":0.2,"fib":0.9,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"More","kcal":43,"p":1.4,"c":9.6,"f":0.5,"fib":5.3,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Nettarina","kcal":44,"p":1.1,"c":10.6,"f":0.3,"fib":1.7,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Papaya","kcal":43,"p":0.5,"c":10.8,"f":0.3,"fib":1.7,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Passion fruit","kcal":97,"p":2.2,"c":23.4,"f":0.7,"fib":10.4,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Pera","kcal":57,"p":0.4,"c":15.2,"f":0.1,"fib":3.1,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Pesca","kcal":39,"p":0.9,"c":9.5,"f":0.3,"fib":1.5,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Pompelmo","kcal":42,"p":0.8,"c":10.7,"f":0.1,"fib":1.6,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Prugne","kcal":46,"p":0.7,"c":11.4,"f":0.3,"fib":1.4,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Ribes","kcal":56,"p":1.4,"c":13.8,"f":0.2,"fib":4.3,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Uva","kcal":69,"p":0.7,"c":18.1,"f":0.2,"fib":0.9,"category":"Frutta","scStatus":"forbidden","scNote":"La frutta viene normalmente esclusa nei giorni Slow Carb standard; meglio cheat day."},{"name":"Fagioli bianchi cotti","kcal":139,"p":9.7,"c":25,"f":0.4,"fib":6.3,"category":"Legumi","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Fagioli pinto cotti","kcal":143,"p":9,"c":26,"f":0.7,"fib":9,"category":"Legumi","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Fagioli rossi kidney cotti","kcal":127,"p":8.7,"c":22.8,"f":0.5,"fib":6.4,"category":"Legumi","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Fave cotte","kcal":110,"p":7.6,"c":19.7,"f":0.4,"fib":5.4,"category":"Legumi","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Lupini cotti","kcal":119,"p":16,"c":10,"f":3,"fib":3,"category":"Legumi","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Soia cotta","kcal":173,"p":16.6,"c":9.9,"f":9,"fib":6,"category":"Legumi","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Acciughe sott’olio sgocciolate","kcal":210,"p":29,"c":0,"f":10,"fib":0,"category":"Pesce","scStatus":"limited","scNote":"Compatibili ma salate e caloriche per l’olio."},{"name":"Calamari cotti","kcal":175,"p":18,"c":8,"f":7,"fib":0,"category":"Pesce","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Cozze cotte","kcal":172,"p":24,"c":7,"f":4.5,"fib":0,"category":"Pesce","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Pesce spada cotto","kcal":172,"p":23,"c":0,"f":8,"fib":0,"category":"Pesce","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Sardine al naturale","kcal":185,"p":25,"c":0,"f":10.5,"fib":0,"category":"Pesce","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Sgombro cotto","kcal":262,"p":24,"c":0,"f":18,"fib":0,"category":"Pesce","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Vongole cotte","kcal":148,"p":26,"c":5,"f":2,"fib":0,"category":"Pesce","scStatus":"allowed","scNote":"Compatibile con i giorni Slow Carb standard."},{"name":"Guacamole","kcal":150,"p":2,"c":8.5,"f":13.5,"fib":6.5,"category":"Salse","scStatus":"allowed","scNote":"Compatibile, ma calorico: porzione moderata."},{"name":"Harissa","kcal":70,"p":2,"c":10,"f":3,"fib":3,"category":"Salse","scStatus":"allowed","scNote":"Compatibile se senza zuccheri aggiunti."},{"name":"Hummus","kcal":166,"p":7.9,"c":14.3,"f":9.6,"fib":6,"category":"Salse","scStatus":"limited","scNote":"A base di ceci, ma facile aumentare molto le calorie: porzione controllata."},{"name":"Ketchup","kcal":112,"p":1.3,"c":26,"f":0.2,"fib":0.3,"category":"Salse","scStatus":"forbidden","scNote":"Normalmente contiene molto zucchero."},{"name":"Ketchup senza zuccheri aggiunti","kcal":45,"p":1.2,"c":8,"f":0.2,"fib":0.5,"category":"Salse","scStatus":"limited","scNote":"Meglio del ketchup classico, ma resta una salsa da usare con moderazione."},{"name":"Maionese","kcal":680,"p":1.0,"c":0.6,"f":75,"fib":0,"category":"Salse","scStatus":"limited","scNote":"Pochi carboidrati ma molto calorica: usare in piccole quantità."},{"name":"Maionese light","kcal":350,"p":1,"c":7,"f":35,"fib":0,"category":"Salse","scStatus":"limited","scNote":"Può contenere zuccheri/amidi; controllare l’etichetta."},{"name":"Pesto alla genovese","kcal":460,"p":5,"c":5,"f":45,"fib":2,"category":"Salse","scStatus":"limited","scNote":"Ingredienti compatibili in parte, ma molto calorico e con formaggio."},{"name":"Salsa barbecue","kcal":170,"p":1.2,"c":40,"f":0.6,"fib":1,"category":"Salse","scStatus":"forbidden","scNote":"Di solito ricca di zuccheri."},{"name":"Salsa Caesar","kcal":500,"p":3,"c":4,"f":52,"fib":0,"category":"Salse","scStatus":"limited","scNote":"Molto calorica e spesso con latticini/zuccheri."},{"name":"Salsa cocktail","kcal":260,"p":2,"c":16,"f":21,"fib":0,"category":"Salse","scStatus":"forbidden","scNote":"Spesso contiene ketchup e zuccheri."},{"name":"Salsa di soia","kcal":53,"p":8.1,"c":4.9,"f":0.6,"fib":0.8,"category":"Salse","scStatus":"allowed","scNote":"Compatibile; attenzione soprattutto al sodio."},{"name":"Salsa messicana di pomodoro","kcal":36,"p":1.5,"c":7,"f":0.3,"fib":1.5,"category":"Salse","scStatus":"allowed","scNote":"Compatibile se senza zuccheri aggiunti."},{"name":"Salsa piccante tipo Tabasco","kcal":12,"p":1,"c":1.8,"f":0.8,"fib":0.4,"category":"Salse","scStatus":"allowed","scNote":"Compatibile se senza zuccheri aggiunti."},{"name":"Salsa ranch","kcal":430,"p":1.5,"c":8,"f":43,"fib":0,"category":"Salse","scStatus":"limited","scNote":"Molto calorica; spesso contiene latticini e zuccheri."},{"name":"Salsa teriyaki","kcal":89,"p":5.9,"c":15.6,"f":0,"fib":0.2,"category":"Salse","scStatus":"forbidden","scNote":"Tipicamente contiene zucchero."},{"name":"Salsa Worcestershire","kcal":78,"p":0,"c":19,"f":0,"fib":0,"category":"Salse","scStatus":"limited","scNote":"Contiene zuccheri in quantità variabile: usarne poca."},{"name":"Senape","kcal":66,"p":4.4,"c":5.8,"f":4.0,"fib":3.3,"category":"Salse","scStatus":"allowed","scNote":"Generalmente compatibile; controlla che non abbia zucchero aggiunto."},{"name":"Senape di Digione","kcal":66,"p":4.4,"c":5.8,"f":4,"fib":3.3,"category":"Salse","scStatus":"allowed","scNote":"Compatibile se senza zuccheri aggiunti."},{"name":"Sriracha","kcal":93,"p":1.3,"c":19,"f":1.1,"fib":1,"category":"Salse","scStatus":"limited","scNote":"Spesso contiene zucchero: usarne poca."},{"name":"Tahina","kcal":595,"p":17,"c":21,"f":53,"fib":9,"category":"Salse","scStatus":"limited","scNote":"Sesamo concentrato e calorico: porzione piccola."},{"name":"Tamari","kcal":60,"p":10,"c":5,"f":0.5,"fib":0.8,"category":"Salse","scStatus":"allowed","scNote":"Compatibile se senza zuccheri aggiunti."},{"name":"Tzatziki","kcal":85,"p":4,"c":4,"f":6,"fib":0.5,"category":"Salse","scStatus":"limited","scNote":"Contiene yogurt: non è una scelta base della Slow Carb classica."},{"name":"Barretta ai cereali","kcal":380,"p":7,"c":70,"f":9,"fib":5,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Barretta proteica","kcal":350,"p":30,"c":35,"f":10,"fib":8,"category":"Snack e dolci","scStatus":"limited","scNote":"Può essere usata solo occasionalmente: controlla zuccheri e ingredienti."},{"name":"Biscotti integrali","kcal":420,"p":8,"c":68,"f":14,"fib":7,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Biscotti secchi","kcal":430,"p":7,"c":74,"f":13,"fib":3,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Brioche","kcal":375,"p":8,"c":50,"f":16,"fib":2,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Caramelle dure","kcal":394,"p":0,"c":98,"f":0,"fib":0,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Caramelle gommose","kcal":340,"p":6.5,"c":77,"f":0.2,"fib":0,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Cioccolato al latte","kcal":535,"p":7.7,"c":59,"f":30,"fib":3.4,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Cioccolato bianco","kcal":539,"p":5.9,"c":59,"f":32,"fib":0.2,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Cracker salati","kcal":430,"p":9,"c":70,"f":13,"fib":3,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Croissant","kcal":406,"p":8,"c":46,"f":21,"fib":2.6,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Focaccia","kcal":320,"p":8,"c":45,"f":12,"fib":2.5,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Gallette di mais","kcal":381,"p":8,"c":80,"f":3,"fib":4,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Gallette di riso","kcal":387,"p":8,"c":81,"f":3,"fib":3.5,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Gelato alla crema","kcal":207,"p":3.5,"c":24,"f":11,"fib":0.7,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Grissini","kcal":410,"p":12,"c":72,"f":8,"fib":4,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Nachos","kcal":500,"p":7,"c":57,"f":27,"fib":5,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Nutella","kcal":539,"p":6.3,"c":57.5,"f":30.9,"fib":3.4,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Patatine fritte in busta","kcal":536,"p":7,"c":53,"f":35,"fib":4.8,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Piadina","kcal":340,"p":8,"c":52,"f":11,"fib":2.5,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Pizza margherita","kcal":266,"p":11,"c":33,"f":10,"fib":2.3,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Popcorn al burro","kcal":500,"p":9,"c":57,"f":28,"fib":10,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Popcorn al naturale","kcal":387,"p":13,"c":78,"f":4.5,"fib":15,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Pretzel","kcal":380,"p":10,"c":80,"f":3,"fib":3,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Sorbetto","kcal":140,"p":0.5,"c":34,"f":0.2,"fib":1,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Taralli","kcal":450,"p":10,"c":65,"f":17,"fib":3,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Tiramisù","kcal":283,"p":4.7,"c":31,"f":15,"fib":0.8,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Wafer","kcal":520,"p":7,"c":60,"f":28,"fib":2,"category":"Snack e dolci","scStatus":"forbidden","scNote":"Snack/prodotto raffinato non compatibile nei giorni Slow Carb standard."},{"name":"Curry in polvere","kcal":325,"p":14,"c":58,"f":14,"fib":33,"category":"Spezie","scStatus":"allowed","scNote":"Spezie compatibili; le quantità d’uso sono molto piccole."},{"name":"Origano secco","kcal":265,"p":9,"c":69,"f":4.3,"fib":43,"category":"Spezie","scStatus":"allowed","scNote":"Compatibile come erba aromatica."},{"name":"Paprika","kcal":282,"p":14,"c":54,"f":13,"fib":35,"category":"Spezie","scStatus":"allowed","scNote":"Spezie compatibili; le quantità d’uso sono molto piccole."},{"name":"Pepe nero","kcal":251,"p":10,"c":64,"f":3.3,"fib":25,"category":"Spezie","scStatus":"allowed","scNote":"Compatibile come spezia."},{"name":"Barbabietola cotta","kcal":44,"p":1.7,"c":10,"f":0.2,"fib":2,"category":"Verdure","scStatus":"limited","scNote":"Verdura compatibile; per le più dolci o concentrate mantieni una porzione ragionevole."},{"name":"Bietole","kcal":19,"p":1.8,"c":3.7,"f":0.2,"fib":1.6,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Broccolo romano","kcal":31,"p":2.5,"c":5.4,"f":0.3,"fib":3.1,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Carciofi cotti","kcal":47,"p":3.3,"c":10.5,"f":0.2,"fib":5.4,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Cavoletti di Bruxelles","kcal":43,"p":3.4,"c":9,"f":0.3,"fib":3.8,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Cavolo nero","kcal":49,"p":4.3,"c":8.8,"f":0.9,"fib":3.6,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Cavolo riccio kale","kcal":49,"p":4.3,"c":8.8,"f":0.9,"fib":3.6,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Cavolo rosso","kcal":31,"p":1.4,"c":7.4,"f":0.2,"fib":2.1,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Cetriolini sottaceto","kcal":12,"p":0.5,"c":2.4,"f":0.2,"fib":1,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Cicoria","kcal":23,"p":1.7,"c":4.7,"f":0.3,"fib":4,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Cime di rapa","kcal":22,"p":3.2,"c":2.9,"f":0.5,"fib":2.7,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Crauti","kcal":19,"p":0.9,"c":4.3,"f":0.1,"fib":2.9,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Cuori di palma","kcal":28,"p":2.5,"c":4.6,"f":0.6,"fib":2.4,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Finocchio","kcal":31,"p":1.2,"c":7.3,"f":0.2,"fib":3.1,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Funghi pleurotus","kcal":33,"p":3.3,"c":6.1,"f":0.4,"fib":2.3,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Funghi porcini","kcal":34,"p":3.9,"c":5.1,"f":0.7,"fib":2.5,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Germogli di bambù","kcal":27,"p":2.6,"c":5.2,"f":0.3,"fib":2.2,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Germogli di soia","kcal":30,"p":3,"c":5.9,"f":0.2,"fib":1.8,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Indivia","kcal":17,"p":1.3,"c":3.4,"f":0.2,"fib":3.1,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Okra","kcal":33,"p":1.9,"c":7.5,"f":0.2,"fib":3.2,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Peperoni gialli","kcal":27,"p":1,"c":6.3,"f":0.2,"fib":0.9,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Peperoni verdi","kcal":20,"p":0.9,"c":4.6,"f":0.2,"fib":1.7,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Pomodori secchi","kcal":258,"p":14.1,"c":55.8,"f":3,"fib":12.3,"category":"Verdure","scStatus":"limited","scNote":"Verdura compatibile; per le più dolci o concentrate mantieni una porzione ragionevole."},{"name":"Porro","kcal":61,"p":1.5,"c":14.2,"f":0.3,"fib":1.8,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Radicchio","kcal":23,"p":1.4,"c":4.5,"f":0.3,"fib":0.9,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Ravanelli","kcal":16,"p":0.7,"c":3.4,"f":0.1,"fib":1.6,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Scarola","kcal":17,"p":1.3,"c":3.4,"f":0.2,"fib":3.1,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Sedano","kcal":14,"p":0.7,"c":3,"f":0.2,"fib":1.6,"category":"Verdure","scStatus":"allowed","scNote":"Verdura non amidacea compatibile con i giorni Slow Carb standard."},{"name":"Zucca cotta","kcal":26,"p":1,"c":6.5,"f":0.1,"fib":0.5,"category":"Verdure","scStatus":"limited","scNote":"Verdura compatibile; per le più dolci o concentrate mantieni una porzione ragionevole."}];
@@ -516,13 +590,222 @@ let state = {
   foods:[],
   checks:{},
   cheatDays:{},
-  customBarcodes:{}
+  customBarcodes:{},
+  _meta:{updatedAt:null}
 };
 
 function load(){
   try{ state = Object.assign(state, JSON.parse(localStorage.getItem(LS_KEY)||"{}")); }catch(e){}
 }
-function save(){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+function save(){
+  if(!applyingRemoteState){
+    state._meta=state._meta||{};
+    state._meta.updatedAt=new Date().toISOString();
+  }
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+  if(!applyingRemoteState) queueCloudPush();
+}
+
+
+function getCloudConfig(){
+  try{return JSON.parse(localStorage.getItem(CLOUD_CONFIG_KEY)||"{}")}catch(e){return {}}
+}
+function setCloudStatus(text,kind=""){
+  const box=$("cloudStatus"), label=$("cloudStatusText");
+  if(label) label.textContent=text;
+  if(box) box.className="sync-status"+(kind?` ${kind}`:"");
+}
+function cloudConfigured(){
+  const c=getCloudConfig();
+  return !!(c.url && c.key);
+}
+function fillCloudConfig(){
+  const c=getCloudConfig();
+  if($("supabaseUrl")) $("supabaseUrl").value=c.url||"";
+  if($("supabaseAnonKey")) $("supabaseAnonKey").value=c.key||"";
+}
+async function initSupabaseClient(){
+  if(!cloudConfigured()){
+    sbClient=null; sbSession=null;
+    setCloudStatus("Cloud non configurato");
+    return false;
+  }
+  if(!window.supabase?.createClient){
+    setCloudStatus("Libreria Supabase non disponibile","bad");
+    return false;
+  }
+  const c=getCloudConfig();
+  try{
+    sbClient=window.supabase.createClient(c.url,c.key,{
+      auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}
+    });
+    const {data,error}=await sbClient.auth.getSession();
+    if(error) throw error;
+    sbSession=data.session||null;
+    updateCloudAuthUI();
+    sbClient.auth.onAuthStateChange(async (_event,session)=>{
+      sbSession=session||null;
+      updateCloudAuthUI();
+      if(sbSession) setTimeout(()=>syncCloudBidirectional(),0);
+    });
+    if(sbSession) await syncCloudBidirectional();
+    return true;
+  }catch(err){
+    console.error(err);
+    sbClient=null; sbSession=null;
+    setCloudStatus("Configurazione Supabase non valida","bad");
+    return false;
+  }
+}
+function updateCloudAuthUI(){
+  if(!cloudConfigured()){
+    setCloudStatus("Cloud non configurato");
+    return;
+  }
+  if(sbSession?.user){
+    setCloudStatus(`Connesso come ${sbSession.user.email||"utente"}`,"ok");
+  }else{
+    setCloudStatus("Configurato · accesso richiesto","warn");
+  }
+}
+function queueCloudPush(){
+  if(!sbClient || !sbSession?.user || !navigator.onLine) return;
+  clearTimeout(cloudPushTimer);
+  cloudPushTimer=setTimeout(()=>pushCloudState(),900);
+}
+async function pushCloudState(){
+  if(!sbClient || !sbSession?.user || cloudSyncBusy || !navigator.onLine) return false;
+  cloudSyncBusy=true;
+  setCloudStatus("Sincronizzazione…","syncing");
+  try{
+    const payload=JSON.parse(JSON.stringify(state));
+    const {error}=await sbClient.from("tracker_state").upsert({
+      user_id:sbSession.user.id,
+      data:payload,
+      updated_at:new Date().toISOString()
+    },{onConflict:"user_id"});
+    if(error) throw error;
+    setCloudStatus(`Sincronizzato · ${new Date().toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`,"ok");
+    return true;
+  }catch(err){
+    console.error("Cloud push",err);
+    setCloudStatus("Errore di sincronizzazione","bad");
+    return false;
+  }finally{
+    cloudSyncBusy=false;
+  }
+}
+function remoteIsNewer(remote){
+  const r=remote?._meta?.updatedAt;
+  const l=state?._meta?.updatedAt;
+  if(!r) return false;
+  if(!l) return true;
+  return new Date(r).getTime()>new Date(l).getTime();
+}
+async function syncCloudBidirectional(){
+  if(!sbClient || !sbSession?.user || cloudSyncBusy || !navigator.onLine) return;
+  cloudSyncBusy=true;
+  setCloudStatus("Sincronizzazione…","syncing");
+  try{
+    const {data,error}=await sbClient.from("tracker_state")
+      .select("data,updated_at")
+      .eq("user_id",sbSession.user.id)
+      .maybeSingle();
+    if(error) throw error;
+
+    if(!data){
+      const payload=JSON.parse(JSON.stringify(state));
+      const {error:upErr}=await sbClient.from("tracker_state").upsert({
+        user_id:sbSession.user.id,
+        data:payload,
+        updated_at:new Date().toISOString()
+      },{onConflict:"user_id"});
+      if(upErr) throw upErr;
+    }else if(remoteIsNewer(data.data)){
+      applyingRemoteState=true;
+      state={
+        ...state,
+        ...(data.data||{}),
+        profile:{...(state.profile||{}), ...((data.data||{}).profile||{})},
+        customBarcodes:{...((data.data||{}).customBarcodes||{})},
+        weights:Array.isArray(data.data?.weights)?data.data.weights:[],
+        foods:Array.isArray(data.data?.foods)?data.data.foods:[],
+        checks:data.data?.checks&&typeof data.data.checks==="object"?data.data.checks:{},
+        cheatDays:data.data?.cheatDays&&typeof data.data.cheatDays==="object"?data.data.cheatDays:{},
+        _meta:{...(data.data?._meta||{})}
+      };
+      localStorage.setItem(LS_KEY,JSON.stringify(state));
+      fillProfile();
+      renderAll();
+      applyingRemoteState=false;
+    }else{
+      const payload=JSON.parse(JSON.stringify(state));
+      const {error:upErr}=await sbClient.from("tracker_state").upsert({
+        user_id:sbSession.user.id,
+        data:payload,
+        updated_at:new Date().toISOString()
+      },{onConflict:"user_id"});
+      if(upErr) throw upErr;
+    }
+    setCloudStatus(`Sincronizzato · ${new Date().toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`,"ok");
+  }catch(err){
+    console.error("Cloud sync",err);
+    setCloudStatus("Errore di sincronizzazione","bad");
+  }finally{
+    applyingRemoteState=false;
+    cloudSyncBusy=false;
+  }
+}
+async function saveCloudConfig(){
+  const url=$("supabaseUrl").value.trim();
+  const key=$("supabaseAnonKey").value.trim();
+  if(!url || !key){alert("Inserisci Project URL e anon/publishable key.");return}
+  localStorage.setItem(CLOUD_CONFIG_KEY,JSON.stringify({url,key}));
+  sbClient=null; sbSession=null;
+  await initSupabaseClient();
+}
+async function clearCloudConfig(){
+  if(!confirm("Rimuovere la configurazione cloud da questo dispositivo? I dati locali non verranno cancellati.")) return;
+  try{if(sbClient) await sbClient.auth.signOut()}catch(e){}
+  localStorage.removeItem(CLOUD_CONFIG_KEY);
+  sbClient=null; sbSession=null;
+  fillCloudConfig();
+  updateCloudAuthUI();
+}
+async function cloudLogin(){
+  if(!sbClient && !(await initSupabaseClient())) return;
+  const email=$("cloudEmail").value.trim();
+  const password=$("cloudPassword").value;
+  if(!email||!password){alert("Inserisci email e password.");return}
+  setCloudStatus("Accesso…","syncing");
+  const {data,error}=await sbClient.auth.signInWithPassword({email,password});
+  if(error){setCloudStatus(error.message||"Accesso non riuscito","bad");return}
+  sbSession=data.session||null;
+  updateCloudAuthUI();
+  await syncCloudBidirectional();
+}
+async function cloudRegister(){
+  if(!sbClient && !(await initSupabaseClient())) return;
+  const email=$("cloudEmail").value.trim();
+  const password=$("cloudPassword").value;
+  if(!email||!password){alert("Inserisci email e password.");return}
+  if(password.length<6){alert("Usa una password di almeno 6 caratteri.");return}
+  setCloudStatus("Creazione account…","syncing");
+  const {data,error}=await sbClient.auth.signUp({email,password});
+  if(error){setCloudStatus(error.message||"Registrazione non riuscita","bad");return}
+  sbSession=data.session||null;
+  if(sbSession){
+    updateCloudAuthUI();
+    await syncCloudBidirectional();
+  }else{
+    setCloudStatus("Account creato · controlla l'email di conferma","warn");
+  }
+}
+async function cloudLogout(){
+  if(sbClient) await sbClient.auth.signOut();
+  sbSession=null;
+  updateCloudAuthUI();
+}
 
 function fillProfile(){
   const p=state.profile||{};
@@ -1438,6 +1721,12 @@ function init(){
   $("saveBarcodeProduct").onclick=saveCurrentBarcodeAssociation;
   $("scanBtn").onclick=startScan; $("stopScan").onclick=stopScan;
   $("exportBtn").onclick=exportData;
+  $("saveCloudConfig").onclick=saveCloudConfig;
+  $("clearCloudConfig").onclick=clearCloudConfig;
+  $("cloudLogin").onclick=cloudLogin;
+  $("cloudRegister").onclick=cloudRegister;
+  $("cloudLogout").onclick=cloudLogout;
+  $("cloudSyncNow").onclick=syncCloudBidirectional;
   $("importBtn").onclick=()=>$("importFile").click();
   $("importFile").addEventListener("change",e=>importBackupFile(e.target.files?.[0]));
 
@@ -1461,6 +1750,12 @@ window.addEventListener("pageshow",()=>{
   scanResolved=false;
 });
 init();
+fillCloudConfig();
+initSupabaseClient();
+window.addEventListener("online",()=>syncCloudBidirectional());
+document.addEventListener("visibilitychange",()=>{
+  if(!document.hidden) syncCloudBidirectional();
+});
 </script>
 </body>
 </html>
