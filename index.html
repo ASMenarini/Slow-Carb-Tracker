@@ -239,6 +239,27 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
 .cloud-note{font-size:11px;color:var(--muted);line-height:1.45;margin-top:8px}
 @media(max-width:760px){.cloud-grid{grid-template-columns:1fr}}
 
+
+.meal-total-kcal{
+  display:block;
+  margin-top:7px;
+  padding-top:6px;
+  border-top:1px solid #dfe7e2;
+  font-size:12px;
+  line-height:1.2;
+  font-weight:800;
+  color:var(--text);
+}
+.meal-total-kcal small{
+  display:block;
+  margin-top:1px;
+  color:var(--muted);
+  font-size:9px;
+  font-weight:650;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+}
+
 </style>
 </head>
 <body>
@@ -1172,8 +1193,9 @@ function renderFoods(){
   groups.forEach(([meal,mealItems])=>{
     mealItems.forEach((x,index)=>{
       const tr=document.createElement("tr");
+      const mealKcal=mealItems.reduce((sum,item)=>sum+(+item.kcal||0),0);
       const mealCell=index===0
-        ? `<td class="meal-group-cell" rowspan="${mealItems.length}">${escapeHtml(meal)}<span class="meal-count">${mealItems.length} ${mealItems.length===1?"alimento":"alimenti"}</span></td>`
+        ? `<td class="meal-group-cell" rowspan="${mealItems.length}">${escapeHtml(meal)}<span class="meal-count">${mealItems.length} ${mealItems.length===1?"alimento":"alimenti"}</span><span class="meal-total-kcal">${Math.round(mealKcal)} kcal<small>totale pasto</small></span></td>`
         : "";
       tr.innerHTML=`${mealCell}<td>${escapeHtml(x.name)}</td><td>${slowCarbBadge(x.name)}</td><td>${round(x.grams,1)}${x.portionMode==="unit"?`<div class="muted tiny">${round(x.units,1)} ${escapeHtml(x.unitLabel||"unità")}</div>`:""}</td><td>${Math.round(x.kcal)}</td><td>${round(x.p)}</td><td>${round(x.c)}</td><td>${round(x.f)}</td><td>${round(x.fib)}</td><td><button class="btnDanger tiny" data-del-food="${x.id}">Elimina</button></td>`;
       body.appendChild(tr);
