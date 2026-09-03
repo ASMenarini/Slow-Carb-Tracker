@@ -541,6 +541,8 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
           <button class="btnGhost" id="cloudRegister">Crea account</button>
           <button class="btnGhost" id="cloudLogout">Esci</button>
           <button class="btnGhost" id="cloudSyncNow">Sincronizza ora</button>
+          <button class="btnGhost" id="cloudForceUpload">Carica questo dispositivo sul cloud</button>
+          <button class="btnGhost" id="cloudForceDownload">Scarica dal cloud su questo dispositivo</button>
         </div>
         <div class="sync-status" id="cloudStatus"><span class="sync-dot"></span><span id="cloudStatusText">Cloud non configurato</span></div>
         <div class="cloud-note">Dopo l'accesso, ogni modifica viene salvata online automaticamente. Quando apri l'app su un altro dispositivo con lo stesso account, viene caricata la versione più recente.</div>
@@ -801,6 +803,94 @@ async function cloudRegister(){
     setCloudStatus("Account creato · controlla l'email di conferma","warn");
   }
 }
+
+async function forceCloudUpload(){
+  if(!sbClient || !sbSession?.user){
+    alert("Accedi prima al cloud.");
+    return;
+  }
+  const ok=confirm(
+    "Caricare i dati di QUESTO dispositivo sul cloud?\n\n"+
+    "Questa operazione sostituirà la copia cloud con i dati presenti qui. "+
+    "Usala sul dispositivo che contiene i dati corretti e più aggiornati."
+  );
+  if(!ok) return;
+
+  cloudSyncBusy=true;
+  setCloudStatus("Caricamento sul cloud…","syncing");
+  try{
+    state._meta=state._meta||{};
+    state._meta.updatedAt=new Date().toISOString();
+    localStorage.setItem(LS_KEY,JSON.stringify(state));
+
+    const payload=JSON.parse(JSON.stringify(state));
+    const {error}=await sbClient.from("tracker_state").upsert({
+      user_id:sbSession.user.id,
+      data:payload,
+      updated_at:new Date().toISOString()
+    },{onConflict:"user_id"});
+    if(error) throw error;
+
+    setCloudStatus(`Dati di questo dispositivo caricati · ${new Date().toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`,"ok");
+    alert("Dati caricati sul cloud correttamente.");
+  }catch(err){
+    console.error("Force upload",err);
+    setCloudStatus("Errore nel caricamento sul cloud","bad");
+    alert("Errore nel caricamento: "+(err?.message||"operazione non riuscita"));
+  }finally{
+    cloudSyncBusy=false;
+  }
+}
+
+async function forceCloudDownload(){
+  if(!sbClient || !sbSession?.user){
+    alert("Accedi prima al cloud.");
+    return;
+  }
+  const ok=confirm(
+    "Scaricare i dati dal cloud su QUESTO dispositivo?\n\n"+
+    "I dati locali presenti qui verranno sostituiti con la copia cloud."
+  );
+  if(!ok) return;
+
+  cloudSyncBusy=true;
+  setCloudStatus("Download dal cloud…","syncing");
+  try{
+    const {data,error}=await sbClient.from("tracker_state")
+      .select("data,updated_at")
+      .eq("user_id",sbSession.user.id)
+      .maybeSingle();
+    if(error) throw error;
+    if(!data?.data) throw new Error("Nel cloud non ci sono ancora dati da scaricare");
+
+    applyingRemoteState=true;
+    const remote=data.data;
+    state={
+      ...state,
+      ...remote,
+      profile:{...(state.profile||{}), ...(remote.profile||{})},
+      customBarcodes:{...(remote.customBarcodes||{})},
+      weights:Array.isArray(remote.weights)?remote.weights:[],
+      foods:Array.isArray(remote.foods)?remote.foods:[],
+      checks:remote.checks&&typeof remote.checks==="object"?remote.checks:{},
+      cheatDays:remote.cheatDays&&typeof remote.cheatDays==="object"?remote.cheatDays:{},
+      _meta:{...(remote._meta||{})}
+    };
+    localStorage.setItem(LS_KEY,JSON.stringify(state));
+    fillProfile();
+    renderAll();
+    setCloudStatus(`Dati cloud scaricati · ${new Date().toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`,"ok");
+    alert("Dati scaricati dal cloud correttamente.");
+  }catch(err){
+    console.error("Force download",err);
+    setCloudStatus("Errore nel download dal cloud","bad");
+    alert("Errore nel download: "+(err?.message||"operazione non riuscita"));
+  }finally{
+    applyingRemoteState=false;
+    cloudSyncBusy=false;
+  }
+}
+
 async function cloudLogout(){
   if(sbClient) await sbClient.auth.signOut();
   sbSession=null;
@@ -1727,6 +1817,8 @@ function init(){
   $("cloudRegister").onclick=cloudRegister;
   $("cloudLogout").onclick=cloudLogout;
   $("cloudSyncNow").onclick=syncCloudBidirectional;
+  $("cloudForceUpload").onclick=forceCloudUpload;
+  $("cloudForceDownload").onclick=forceCloudDownload;
   $("importBtn").onclick=()=>$("importFile").click();
   $("importFile").addEventListener("change",e=>importBackupFile(e.target.files?.[0]));
 
