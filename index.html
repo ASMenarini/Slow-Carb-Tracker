@@ -217,13 +217,6 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
   font-weight:600;
   color:var(--muted);
 }
-.meal-group-cell .meal-kcal{
-  display:block;
-  margin-top:7px;
-  font-size:12px;
-  font-weight:800;
-  color:var(--text);
-}
 @media(max-width:760px){
   .app-group > summary{padding:13px 14px;font-size:16px}
   .app-group-body{padding:10px}
@@ -238,7 +231,9 @@ canvas{width:100%;height:240px;background:#fff;border-radius:14px;border:1px sol
       <h1>Slow Carb Tracker</h1>
       <div class="muted">Peso, obiettivo, calorie indicative, pasti e macronutrienti</div>
     </div>
-    <button class="btnGhost" id="exportBtn">Esporta dati</button>
+    <button class="btnGhost" id="exportBtn">Esporta backup</button>
+        <button class="btnGhost" id="importBtn">Importa backup</button>
+        <input type="file" id="importFile" accept=".json,application/json" class="hidden">
   </div>
 
 
@@ -804,9 +799,8 @@ function renderFoods(){
   groups.forEach(([meal,mealItems])=>{
     mealItems.forEach((x,index)=>{
       const tr=document.createElement("tr");
-      const mealKcal=Math.round(mealItems.reduce((sum,item)=>sum+(+item.kcal||0),0));
       const mealCell=index===0
-        ? `<td class="meal-group-cell" rowspan="${mealItems.length}">${escapeHtml(meal)}<span class="meal-count">${mealItems.length} ${mealItems.length===1?"alimento":"alimenti"}</span><span class="meal-kcal">${mealKcal} kcal</span></td>`
+        ? `<td class="meal-group-cell" rowspan="${mealItems.length}">${escapeHtml(meal)}<span class="meal-count">${mealItems.length} ${mealItems.length===1?"alimento":"alimenti"}</span></td>`
         : "";
       tr.innerHTML=`${mealCell}<td>${escapeHtml(x.name)}</td><td>${slowCarbBadge(x.name)}</td><td>${round(x.grams,1)}${x.portionMode==="unit"?`<div class="muted tiny">${round(x.units,1)} ${escapeHtml(x.unitLabel||"unità")}</div>`:""}</td><td>${Math.round(x.kcal)}</td><td>${round(x.p)}</td><td>${round(x.c)}</td><td>${round(x.f)}</td><td>${round(x.fib)}</td><td><button class="btnDanger tiny" data-del-food="${x.id}">Elimina</button></td>`;
       body.appendChild(tr);
@@ -1326,9 +1320,72 @@ function updateScore(){
 }
 
 function exportData(){
-  const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
-  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`slow-carb-tracker-${today()}.json`;a.click();URL.revokeObjectURL(a.href);
+  const payload={
+    app:"Slow Carb Tracker",
+    version:7,
+    exportedAt:new Date().toISOString(),
+    data:state
+  };
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+  const a=document.createElement("a");
+  const d=new Date();
+  const stamp=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}_${String(d.getHours()).padStart(2,"0")}-${String(d.getMinutes()).padStart(2,"0")}`;
+  a.href=URL.createObjectURL(blob);
+  a.download=`slow-carb-tracker-backup_${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
+
+async function importBackupFile(file){
+  if(!file) return;
+  try{
+    const text=await file.text();
+    const parsed=JSON.parse(text);
+    const imported=parsed && parsed.data ? parsed.data : parsed;
+
+    if(!imported || typeof imported!=="object"){
+      throw new Error("Formato backup non valido");
+    }
+
+    const expected=["profile","weights","foods"];
+    const hasAnyExpected=expected.some(k=>Object.prototype.hasOwnProperty.call(imported,k));
+    if(!hasAnyExpected){
+      throw new Error("Questo file non sembra un backup del Slow Carb Tracker");
+    }
+
+    const ok=confirm(
+      "Importare questo backup?\n\n"+
+      "I dati attualmente salvati su questo dispositivo verranno sostituiti con quelli del file selezionato.\n\n"+
+      "Se vuoi conservarli, annulla e fai prima un'esportazione."
+    );
+    if(!ok) return;
+
+    state={
+      ...state,
+      ...imported,
+      profile:{...(state.profile||{}), ...(imported.profile||{})},
+      customBarcodes:{...(imported.customBarcodes||{})},
+      weights:Array.isArray(imported.weights)?imported.weights:[],
+      foods:Array.isArray(imported.foods)?imported.foods:[],
+      slowDays: imported.slowDays && typeof imported.slowDays==="object" ? imported.slowDays : {},
+      cheatDays: imported.cheatDays && typeof imported.cheatDays==="object" ? imported.cheatDays : {}
+    };
+
+    save();
+    if(typeof initFormFromState==="function") initFormFromState();
+    renderAll();
+    alert("Backup importato correttamente.");
+  }catch(err){
+    console.error(err);
+    alert("Impossibile importare il backup: "+(err?.message||"file non valido"));
+  }finally{
+    const input=$("importFile");
+    if(input) input.value="";
+  }
+}
+
 
 function renderAll(){
   renderProfileMetrics(); renderDashboard(); renderWeights(); renderFoods(); renderChecklist();
@@ -1381,6 +1438,8 @@ function init(){
   $("saveBarcodeProduct").onclick=saveCurrentBarcodeAssociation;
   $("scanBtn").onclick=startScan; $("stopScan").onclick=stopScan;
   $("exportBtn").onclick=exportData;
+  $("importBtn").onclick=()=>$("importFile").click();
+  $("importFile").addEventListener("change",e=>importBackupFile(e.target.files?.[0]));
 
   $("expandAllGroups").onclick=()=>{
     document.querySelectorAll(".app-group").forEach(g=>g.open=true);
