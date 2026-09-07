@@ -1332,21 +1332,21 @@ const FOOD_SEARCH_INDEX = buildFoodSearchIndex();
 function findFoodByQuery(q){
   const raw=String(q||"").trim();
   if(!raw) return null;
-  const norm=normalizeFoodQuery(raw);
+  const norm=normalizeFoodSearch(raw);
 
   const custom=[...(state.customFoods||[])];
   const all=[...custom,...FOOD_CATALOG];
 
-  let exact=all.find(f=>normalizeFoodQuery(f.name)===norm);
+  let exact=all.find(f=>normalizeFoodSearch(f.name)===norm);
   if(exact) return exact;
 
   const synonym=FOOD_SYNONYMS[norm];
   if(synonym){
-    const bySyn=all.find(f=>normalizeFoodQuery(f.name)===normalizeFoodQuery(synonym));
+    const bySyn=all.find(f=>normalizeFoodSearch(f.name)===normalizeFoodSearch(synonym));
     if(bySyn) return bySyn;
   }
 
-  return all.find(f=>normalizeFoodQuery(f.name).includes(norm) || norm.includes(normalizeFoodQuery(f.name))) || null;
+  return all.find(f=>normalizeFoodSearch(f.name).includes(norm) || norm.includes(normalizeFoodSearch(f.name))) || null;
 }
 function initFoodCatalog(){
   const dl=$("foodCatalog");
@@ -1508,54 +1508,51 @@ function calculatedPortionGrams(){
 
 
 function importHistoricalFoodsIntoCatalog(){
-  state.customFoods=state.customFoods||[];
-  const existingNames=new Set([
-    ...FOOD_CATALOG.map(f=>normalizeFoodQuery(f.name)),
-    ...state.customFoods.map(f=>normalizeFoodQuery(f.name))
+  if(!Array.isArray(state.customFoods)) state.customFoods=[];
+
+  const known=new Set([
+    ...FOOD_CATALOG.map(f=>normalizeFoodSearch(f.name)),
+    ...state.customFoods.map(f=>normalizeFoodSearch(f.name))
   ]);
 
-  let added=0;
-  const byName=new Map();
+  // Pick the most recent usable diary occurrence for each unknown food.
+  const latestByName=new Map();
+  (Array.isArray(state.foods)?state.foods:[]).forEach(item=>{
+    const name=String(item?.name||"").trim();
+    const grams=Number(item?.grams||0);
+    if(!name || !(grams>0)) return;
 
-  (state.foods||[]).forEach(item=>{
-    const name=(item.name||"").trim();
-    const grams=+item.grams||0;
-    if(!name || grams<=0) return;
+    const key=normalizeFoodSearch(name);
+    if(!key || known.has(key)) return;
 
-    const key=normalizeFoodQuery(name);
-    if(existingNames.has(key)) return;
-
-    // Use the most recent occurrence of the same historical food.
-    const prev=byName.get(key);
+    const prev=latestByName.get(key);
     if(!prev || String(item.date||"") >= String(prev.date||"")){
-      byName.set(key,item);
+      latestByName.set(key,item);
     }
   });
 
-  byName.forEach(item=>{
-    const grams=+item.grams||0;
-    if(grams<=0) return;
+  let added=0;
+  latestByName.forEach(item=>{
+    const grams=Number(item.grams||0);
+    if(!(grams>0)) return;
+
     const factor=100/grams;
-    const base=findFoodByQuery(item.name);
+    const name=String(item.name||"").trim();
 
     state.customFoods.push({
-      name:(item.name||"").trim(),
-      kcal:Math.max(0,(+item.kcal||0)*factor),
-      p:Math.max(0,(+item.p||0)*factor),
-      c:Math.max(0,(+item.c||0)*factor),
-      f:Math.max(0,(+item.f||0)*factor),
-      fib:Math.max(0,(+item.fib||0)*factor),
-      scStatus:base?.scStatus||"limited",
-      scNote:base?.scNote||"Alimento recuperato dallo storico: verifica la compatibilità Slow Carb in base agli ingredienti."
+      name,
+      kcal:Math.max(0,Number(item.kcal||0)*factor),
+      p:Math.max(0,Number(item.p||0)*factor),
+      c:Math.max(0,Number(item.c||0)*factor),
+      f:Math.max(0,Number(item.f||0)*factor),
+      fib:Math.max(0,Number(item.fib||0)*factor),
+      scStatus:"limited",
+      scNote:"Alimento recuperato dallo storico: verifica la compatibilità Slow Carb in base agli ingredienti."
     });
-    existingNames.add(normalizeFoodQuery(item.name));
+    known.add(normalizeFoodSearch(name));
     added++;
   });
 
-  if(added>0){
-    save();
-    initFoodCatalog();
-  }
   return added;
 }
 
@@ -1573,7 +1570,7 @@ function learnCustomFoodFromCurrentFields(){
 
   state.customFoods=state.customFoods||[];
 
-  const existingIndex=state.customFoods.findIndex(x=>normalizeFoodQuery(x.name)===normalizeFoodQuery(name));
+  const existingIndex=state.customFoods.findIndex(x=>normalizeFoodSearch(x.name)===normalizeFoodSearch(name));
   const base=findFoodByQuery(name);
 
   const item={
@@ -1588,7 +1585,7 @@ function learnCustomFoodFromCurrentFields(){
   };
 
   if(existingIndex>=0) state.customFoods[existingIndex]=item;
-  else if(!FOOD_CATALOG.some(x=>normalizeFoodQuery(x.name)===normalizeFoodQuery(name))) state.customFoods.push(item);
+  else if(!FOOD_CATALOG.some(x=>normalizeFoodSearch(x.name)===normalizeFoodSearch(name))) state.customFoods.push(item);
 
   initFoodCatalog();
 }
@@ -1990,11 +1987,26 @@ function renderAll(){
 }
 function init(){
   load();
-  const importedHistoricalFoods=importHistoricalFoodsIntoCatalog();
   fillProfile();
   initFoodCatalog();
-  $("weightDate").value=today(); $("foodDate").value=today(); $("dashboardDate").value=today(); updatePortionUI();
-  if(importedHistoricalFoods>0) console.info(`Catalogo personale aggiornato: ${importedHistoricalFoods} alimenti recuperati dallo storico.`);
+  $("weightDate").value=today();
+  $("foodDate").value=today();
+  $("dashboardDate").value=today();
+  updatePortionUI();
+
+  // Import old diary foods only after the app is safely initialized.
+  try{
+    const recovered=importHistoricalFoodsIntoCatalog();
+    if(recovered>0){
+      localStorage.setItem(LS_KEY,JSON.stringify(state));
+      initFoodCatalog();
+      queueCloudPush();
+      console.info(`Catalogo aggiornato: ${recovered} alimenti recuperati dallo storico.`);
+    }
+  }catch(err){
+    // Never let catalog migration block normal app startup.
+    console.error("Recupero alimenti storici non riuscito",err);
+  }
   $("saveProfile").onclick=readProfile;
   $("addWeight").onclick=()=>{
     const date=$("weightDate").value, weight=+$("weightValue").value;
