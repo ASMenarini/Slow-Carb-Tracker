@@ -674,6 +674,7 @@ let state = {
   checks:{},
   cheatDays:{},
   customBarcodes:{},
+  customFoods:[],
   _meta:{updatedAt:null}
 };
 
@@ -811,6 +812,7 @@ async function syncCloudBidirectional(){
         ...(data.data||{}),
         profile:{...(state.profile||{}), ...((data.data||{}).profile||{})},
         customBarcodes:{...((data.data||{}).customBarcodes||{})},
+        customFoods:Array.isArray(data.data?.customFoods)?data.data.customFoods:[],
         weights:Array.isArray(data.data?.weights)?data.data.weights:[],
         foods:Array.isArray(data.data?.foods)?data.data.foods:[],
         checks:data.data?.checks&&typeof data.data.checks==="object"?data.data.checks:{},
@@ -819,6 +821,7 @@ async function syncCloudBidirectional(){
       };
       localStorage.setItem(LS_KEY,JSON.stringify(state));
       fillProfile();
+      initFoodCatalog();
       renderAll();
       applyingRemoteState=false;
     }else{
@@ -951,6 +954,7 @@ async function forceCloudDownload(){
       ...remote,
       profile:{...(state.profile||{}), ...(remote.profile||{})},
       customBarcodes:{...(remote.customBarcodes||{})},
+      customFoods:Array.isArray(remote.customFoods)?remote.customFoods:[],
       weights:Array.isArray(remote.weights)?remote.weights:[],
       foods:Array.isArray(remote.foods)?remote.foods:[],
       checks:remote.checks&&typeof remote.checks==="object"?remote.checks:{},
@@ -959,6 +963,7 @@ async function forceCloudDownload(){
     };
     localStorage.setItem(LS_KEY,JSON.stringify(state));
     fillProfile();
+    initFoodCatalog();
     renderAll();
     setCloudStatus(`Dati cloud scaricati · ${new Date().toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`,"ok");
     alert("Dati scaricati dal cloud correttamente.");
@@ -1324,30 +1329,38 @@ function buildFoodSearchIndex(){
   return idx;
 }
 const FOOD_SEARCH_INDEX = buildFoodSearchIndex();
-function findFoodByQuery(query){
-  const q=normalizeFoodSearch(query);
-  if(!q) return null;
-  const exact=FOOD_SEARCH_INDEX.find(x=>x.term===q);
-  if(exact) return exact.food;
-  const unique=[];
-  const seen=new Set();
-  FOOD_SEARCH_INDEX.filter(x=>x.term.startsWith(q)).forEach(x=>{if(!seen.has(x.food.name)){seen.add(x.food.name);unique.push(x.food);}});
-  return unique.length===1?unique[0]:null;
+function findFoodByQuery(q){
+  const raw=String(q||"").trim();
+  if(!raw) return null;
+  const norm=normalizeFoodQuery(raw);
+
+  const custom=[...(state.customFoods||[])];
+  const all=[...custom,...FOOD_CATALOG];
+
+  let exact=all.find(f=>normalizeFoodQuery(f.name)===norm);
+  if(exact) return exact;
+
+  const synonym=FOOD_SYNONYMS[norm];
+  if(synonym){
+    const bySyn=all.find(f=>normalizeFoodQuery(f.name)===normalizeFoodQuery(synonym));
+    if(bySyn) return bySyn;
+  }
+
+  return all.find(f=>normalizeFoodQuery(f.name).includes(norm) || norm.includes(normalizeFoodQuery(f.name))) || null;
 }
 function initFoodCatalog(){
   const dl=$("foodCatalog");
+  if(!dl) return;
   dl.innerHTML="";
-  FOOD_CATALOG.forEach(f=>{
+  const allFoods=[...FOOD_CATALOG,...(state.customFoods||[])];
+  const seen=new Set();
+  allFoods.forEach(f=>{
+    const key=(f.name||"").trim().toLowerCase();
+    if(!key || seen.has(key)) return;
+    seen.add(key);
     const o=document.createElement("option");
     o.value=f.name;
-    o.label=`${f.kcal} kcal/100g${f.category?" · "+f.category:""}`;
     dl.appendChild(o);
-    (FOOD_SYNONYMS[f.name]||[]).forEach(alias=>{
-      const a=document.createElement("option");
-      a.value=alias;
-      a.label=`→ ${f.name} · ${f.kcal} kcal/100g`;
-      dl.appendChild(a);
-    });
   });
 }
 function autofillFoodFromCatalog(){
@@ -1491,6 +1504,94 @@ function calculatedPortionGrams(){
 }
 
 
+
+
+
+function importHistoricalFoodsIntoCatalog(){
+  state.customFoods=state.customFoods||[];
+  const existingNames=new Set([
+    ...FOOD_CATALOG.map(f=>normalizeFoodQuery(f.name)),
+    ...state.customFoods.map(f=>normalizeFoodQuery(f.name))
+  ]);
+
+  let added=0;
+  const byName=new Map();
+
+  (state.foods||[]).forEach(item=>{
+    const name=(item.name||"").trim();
+    const grams=+item.grams||0;
+    if(!name || grams<=0) return;
+
+    const key=normalizeFoodQuery(name);
+    if(existingNames.has(key)) return;
+
+    // Use the most recent occurrence of the same historical food.
+    const prev=byName.get(key);
+    if(!prev || String(item.date||"") >= String(prev.date||"")){
+      byName.set(key,item);
+    }
+  });
+
+  byName.forEach(item=>{
+    const grams=+item.grams||0;
+    if(grams<=0) return;
+    const factor=100/grams;
+    const base=findFoodByQuery(item.name);
+
+    state.customFoods.push({
+      name:(item.name||"").trim(),
+      kcal:Math.max(0,(+item.kcal||0)*factor),
+      p:Math.max(0,(+item.p||0)*factor),
+      c:Math.max(0,(+item.c||0)*factor),
+      f:Math.max(0,(+item.f||0)*factor),
+      fib:Math.max(0,(+item.fib||0)*factor),
+      scStatus:base?.scStatus||"limited",
+      scNote:base?.scNote||"Alimento recuperato dallo storico: verifica la compatibilità Slow Carb in base agli ingredienti."
+    });
+    existingNames.add(normalizeFoodQuery(item.name));
+    added++;
+  });
+
+  if(added>0){
+    save();
+    initFoodCatalog();
+  }
+  return added;
+}
+
+function learnCustomFoodFromCurrentFields(){
+  const name=$("foodName").value.trim();
+  if(!name) return;
+
+  const kcal=+$("kcal100").value;
+  const p=+$("p100").value;
+  const c=+$("c100").value;
+  const f=+$("f100").value;
+  const fib=+$("fib100").value;
+
+  if(!Number.isFinite(kcal) || kcal<0) return;
+
+  state.customFoods=state.customFoods||[];
+
+  const existingIndex=state.customFoods.findIndex(x=>normalizeFoodQuery(x.name)===normalizeFoodQuery(name));
+  const base=findFoodByQuery(name);
+
+  const item={
+    name,
+    kcal,
+    p:Number.isFinite(p)?p:0,
+    c:Number.isFinite(c)?c:0,
+    f:Number.isFinite(f)?f:0,
+    fib:Number.isFinite(fib)?fib:0,
+    scStatus:base?.scStatus||"limited",
+    scNote:base?.scNote||"Alimento personalizzato: verifica la compatibilità Slow Carb in base agli ingredienti."
+  };
+
+  if(existingIndex>=0) state.customFoods[existingIndex]=item;
+  else if(!FOOD_CATALOG.some(x=>normalizeFoodQuery(x.name)===normalizeFoodQuery(name))) state.customFoods.push(item);
+
+  initFoodCatalog();
+}
 
 function resetFoodSearch(){
   stopScan();
@@ -1863,6 +1964,7 @@ async function importBackupFile(file){
       ...imported,
       profile:{...(state.profile||{}), ...(imported.profile||{})},
       customBarcodes:{...(imported.customBarcodes||{})},
+      customFoods:Array.isArray(imported.customFoods)?imported.customFoods:[],
       weights:Array.isArray(imported.weights)?imported.weights:[],
       foods:Array.isArray(imported.foods)?imported.foods:[],
       slowDays: imported.slowDays && typeof imported.slowDays==="object" ? imported.slowDays : {},
@@ -1887,8 +1989,12 @@ function renderAll(){
   renderProfileMetrics(); renderDashboard(); renderWeights(); renderFoods(); renderChecklist();
 }
 function init(){
-  load(); fillProfile(); initFoodCatalog();
+  load();
+  const importedHistoricalFoods=importHistoricalFoodsIntoCatalog();
+  fillProfile();
+  initFoodCatalog();
   $("weightDate").value=today(); $("foodDate").value=today(); $("dashboardDate").value=today(); updatePortionUI();
+  if(importedHistoricalFoods>0) console.info(`Catalogo personale aggiornato: ${importedHistoricalFoods} alimenti recuperati dallo storico.`);
   $("saveProfile").onclick=readProfile;
   $("addWeight").onclick=()=>{
     const date=$("weightDate").value, weight=+$("weightValue").value;
@@ -1928,6 +2034,7 @@ function init(){
     const item={id:crypto.randomUUID?.()||String(Date.now()),date,meal,name,portionMode,units,unitLabel,grams,
       kcal:(+$("kcal100").value||0)*factor,p:(+$("p100").value||0)*factor,c:(+$("c100").value||0)*factor,
       f:(+$("f100").value||0)*factor,fib:(+$("fib100").value||0)*factor};
+    learnCustomFoodFromCurrentFields();
     state.foods.push(item);save();
     resetFoodSearch();
     $("foodMessage").textContent="Alimento aggiunto.";
