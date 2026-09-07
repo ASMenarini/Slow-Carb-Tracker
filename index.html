@@ -1337,16 +1337,20 @@ function findFoodByQuery(q){
   const custom=[...(state.customFoods||[])];
   const all=[...custom,...FOOD_CATALOG];
 
-  let exact=all.find(f=>normalizeFoodSearch(f.name)===norm);
+  // Exact name match only.
+  const exact=all.find(f=>normalizeFoodSearch(f.name)===norm);
   if(exact) return exact;
 
-  const synonym=FOOD_SYNONYMS[norm];
-  if(synonym){
-    const bySyn=all.find(f=>normalizeFoodSearch(f.name)===normalizeFoodSearch(synonym));
-    if(bySyn) return bySyn;
+  // Exact synonym match only.
+  for(const [canonical,aliases] of Object.entries(FOOD_SYNONYMS||{})){
+    const aliasList=Array.isArray(aliases)?aliases:[aliases];
+    if(aliasList.some(a=>normalizeFoodSearch(a)===norm)){
+      const bySyn=all.find(f=>normalizeFoodSearch(f.name)===normalizeFoodSearch(canonical));
+      if(bySyn) return bySyn;
+    }
   }
 
-  return all.find(f=>normalizeFoodSearch(f.name).includes(norm) || norm.includes(normalizeFoodSearch(f.name))) || null;
+  return null;
 }
 function initFoodCatalog(){
   const dl=$("foodCatalog");
@@ -1365,9 +1369,10 @@ function initFoodCatalog(){
 }
 function autofillFoodFromCatalog(){
   const raw=$("foodName").value.trim();
-  if(!raw) return;
+  if(!raw) return false;
   const f=findFoodByQuery(raw);
-  if(!f) return;
+  if(!f) return false;
+
   $("foodName").value=f.name;
   $("kcal100").value=f.kcal;
   $("p100").value=f.p;
@@ -1377,6 +1382,7 @@ function autofillFoodFromCatalog(){
   $("foodMessage").textContent=`Valori caricati dal catalogo: ${f.kcal} kcal/100 g.`;
   renderSlowCarbStatus(f.name);
   updatePortionUI();
+  return true;
 }
 
 
@@ -2022,11 +2028,13 @@ function init(){
   $("barcode").addEventListener("input",()=>{$("saveBarcodeProduct")?.classList.add("hidden");});
   $("portionMode").addEventListener("change",updatePortionUI);
   $("foodName").addEventListener("change",()=>{
-    autofillFoodFromCatalog();
+    const typed=$("foodName").value.trim();
+    const f=findFoodByQuery(typed);
+    if(f) autofillFoodFromCatalog();
     updatePortionUI();
     renderSlowCarbStatus($("foodName").value.trim());
   });
-  $("foodName").addEventListener("input",()=>{ const f=findFoodByQuery($("foodName").value); if(f) autofillFoodFromCatalog(); });
+  $("foodName").addEventListener("input",()=>{ renderSlowCarbStatus($("foodName").value.trim()); });
   $("addFood").onclick=()=>{
     const date=$("foodDate").value, meal=$("meal").value, name=$("foodName").value.trim();
     const portionMode=$("portionMode").value;
